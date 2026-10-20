@@ -1,0 +1,11 @@
+# Example: cryoflake prepare-manifest --config-dir configs -o pipeline=project
+defaults:
+  - base
+  - _self_
+
+name: manifest
+source_csv: data/source.csv
+manifest_csv: data/manifest.csv
+maps_dir: data/maps
+structures_dir: data/structures
+workers: 4

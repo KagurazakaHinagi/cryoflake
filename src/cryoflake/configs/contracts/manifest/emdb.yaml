@@ -1,0 +1,5 @@
+# Additional columns may be required by a project, but the source reader needs
+# both canonical association columns.
+required_source_columns:
+  - EMD-
+  - Associated PDB

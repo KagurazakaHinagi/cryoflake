@@ -1,0 +1,52 @@
+[project]
+name = "cryoflake"
+version = "0.1.0"
+description = "Portable cryo-EM dataset preparation, storage, and validation"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Kristin Ding", email = "cryoflake@hinagi.moe" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "biotite>=1.6,<2",
+    "boto3>=1.34,<2",
+    "hydra-core>=1.3.2,<2",
+    "mrcfile>=1.5,<2",
+    "numpy>=1.26,<3",
+    "omegaconf>=2.3,<2.4",
+    "python-dotenv>=1.0,<2",
+    "tqdm>=4.66,<5",
+    "typer>=0.16,<1",
+]
+
+[project.scripts]
+cryoflake = "cryoflake.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.14,<1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["documentation: executable user-guide and data-format examples"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.uv.build-backend]
+source-include = ["configs/**", "docs/**", "tests/**", ".github/workflows/ci.yml", ".env.example", "AGENTS.md"]
+source-exclude = ["internal/**"]
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"

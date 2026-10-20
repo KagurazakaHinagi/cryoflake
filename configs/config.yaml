@@ -1,0 +1,15 @@
+# Project configuration: reuse the installed package's format contracts and
+# pipeline groups. Keep local overrides here or add a group under pipeline/.
+defaults:
+  - contracts/artifact@contracts.artifact: npz_json
+  - contracts/targets@contracts.targets: component
+  - contracts/manifest@contracts.manifest: emdb
+  - pipeline: manifest
+  - _self_
+
+hydra:
+  searchpath:
+    - pkg://cryoflake.configs
+
+storage:
+  s3_endpoint_url: ${oc.env:CRYOFLAKE_S3_ENDPOINT_URL,null}

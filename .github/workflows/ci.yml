@@ -1,0 +1,24 @@
+name: checks
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked --dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - name: Documentation examples
+        run: uv run pytest tests/documentation
+      - name: Unit and integration tests
+        run: uv run pytest --ignore=tests/documentation --cov=cryoflake --cov-report=term-missing
+      - run: uv build

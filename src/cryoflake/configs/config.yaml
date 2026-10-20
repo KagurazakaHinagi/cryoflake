@@ -1,0 +1,9 @@
+defaults:
+  - contracts/artifact@contracts.artifact: npz_json
+  - contracts/targets@contracts.targets: component
+  - contracts/manifest@contracts.manifest: emdb
+  - pipeline: manifest
+  - _self_
+
+storage:
+  s3_endpoint_url: ${oc.env:CRYOFLAKE_S3_ENDPOINT_URL,null}
