@@ -172,7 +172,7 @@ required embeddings must be in the artifact; no separate sidecar is required.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `preprocess_adapter` | `null` | Explicit raw adapter as `MODULE:CALLABLE`. |
+| `preprocess_adapter` | `null` | Explicit raw adapter: built-in `default` or custom `MODULE:CALLABLE`. |
 | `artifact_output_dir` | `null` | Enable preprocessing using this local output/scratch directory. |
 | `artifact_s3_prefix` | `null` | Publish under an S3 prefix; requires local scratch. |
 | `artifact_reuse_dirs` | `[]` | Local directories searched for valid existing artifacts. |
@@ -188,6 +188,9 @@ required embeddings must be in the artifact; no separate sidecar is required.
 | `reset_preprocess_checkpoint` | `false` | Discard progress when the run contract changes. |
 
 The memory admission limit is automatic; there is no CLI/YAML memory field.
+`default` is an adapter name, not an implicit selection: preprocessing still
+requires `--preprocess-adapter default` or a custom callable. It runs on the
+CPU without model weights and does not generate sequence embeddings.
 See [operational behavior](user-guide.md#workers-memory-and-uploads).
 Checkpoints require POSIX `fcntl` locks. Direct Python
 `preprocess_manifest_csv()` calls enable recovery only when `summary_csv` is

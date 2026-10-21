@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import typer
 from omegaconf import OmegaConf
 from typer import rich_utils
 from typer.testing import CliRunner
@@ -37,6 +38,51 @@ def _source_csv(tmp_path):
     source = tmp_path / "source.csv"
     source.write_text("EMD-,Associated PDB,resolution\n1234,1ABC,2.5\n")
     return source
+
+
+def test_builtin_default_preprocessor_resolves_to_canonical_callable():
+    from cryoflake.preprocess.adapters.default import run
+
+    assert cli._adapter("default") is run
+    assert cli._adapter("cryoflake.preprocess.adapters.default:run") is run
+    with pytest.raises(typer.BadParameter, match="MODULE:CALLABLE"):
+        cli._adapter("default", option="--sequence-embedding-generator")
+
+
+@pytest.mark.parametrize("selection", ["flag", "override"])
+def test_manifest_resolves_builtin_default_adapter_from_cli_configuration(
+    tmp_path, monkeypatch, selection
+):
+    from cryoflake.preprocess.adapters.default import run
+
+    calls = []
+
+    def capture(config, *, preprocess_adapter=None, **kwargs):
+        calls.append((config.pipeline.preprocess_adapter, preprocess_adapter))
+
+    monkeypatch.setattr("cryoflake.preprocess.prepare.run", capture)
+    arguments = [
+        "prepare-manifest",
+        "--source-csv",
+        str(_source_csv(tmp_path)),
+        "--manifest-csv",
+        str(tmp_path / "manifest.csv"),
+        "--artifact-output-dir",
+        str(tmp_path / "artifacts"),
+    ]
+    arguments.extend(
+        [
+            "--override",
+            "pipeline.preprocess_adapter=unavailable_module:run",
+            "--preprocess-adapter",
+            "default",
+        ]
+        if selection == "flag"
+        else ["--override", "pipeline.preprocess_adapter=default"]
+    )
+    result = runner.invoke(cli.app, arguments)
+    assert result.exit_code == 0, result.output
+    assert calls == [("default", run)]
 
 
 def test_help_lists_typer_commands_and_configuration_options():

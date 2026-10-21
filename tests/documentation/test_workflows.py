@@ -18,6 +18,7 @@ from omegaconf import OmegaConf
 
 from cryoflake.manifests.manifest import read_artifact_list, read_manifest_csv
 from cryoflake.storage.artifacts import validate_preprocessed_artifact
+from cryoflake.storage.codec import read_metadata
 from cryoflake.storage.store import load_preprocessed_artifact
 
 from .examples import get_example
@@ -37,6 +38,52 @@ def _batch_command() -> list[str]:
 def _summary(root: Path) -> list[dict[str, str]]:
     with (root / "data/summary.csv").open(newline="") as source:
         return list(csv.DictReader(source))
+
+
+def _assert_default_artifact(artifact_reference: Path | str) -> dict:
+    """Check observed fixture data rather than accepting any valid artifact."""
+    artifact_mapping = load_preprocessed_artifact(artifact_reference)
+    assert {"density_grid", "backbone_coordinates", "full_atom_targets"}.issubset(
+        artifact_mapping
+    )
+    assert {"grid_io", "cas"}.isdisjoint(artifact_mapping)
+    assert artifact_mapping["density_grid"].dtype == np.float32
+    assert np.isfinite(artifact_mapping["density_grid"]).all()
+    assert len(set(artifact_mapping["density_grid"].shape)) == 1
+    assert artifact_mapping["density_grid"].shape[0] % 2 == 0
+    assert artifact_mapping["shape"].dtype == np.int64
+    np.testing.assert_array_equal(
+        artifact_mapping["shape"], artifact_mapping["density_grid"].shape
+    )
+    np.testing.assert_allclose(
+        artifact_mapping["cella"],
+        artifact_mapping["shape"] * artifact_mapping["voxel_size"],
+    )
+    amplitude = artifact_mapping["grid_spectral_amplitude"]
+    assert amplitude.dtype == np.float64
+    assert amplitude.shape == (artifact_mapping["density_grid"].shape[-1] // 2 + 1,)
+    assert np.isfinite(amplitude).all()
+    np.testing.assert_allclose(artifact_mapping["global_origin"], [-62.0] * 3)
+    np.testing.assert_array_equal(
+        artifact_mapping["backbone_coordinates"]["CA"], [[1.0, 1.0, 1.0]]
+    )
+    np.testing.assert_array_equal(
+        artifact_mapping["backbone_coordinates"]["P"], [[2.0, 2.0, 2.0]]
+    )
+    targets = artifact_mapping["full_atom_targets"]
+    np.testing.assert_array_equal(targets["aatype"], [0, 20])
+    np.testing.assert_array_equal(targets["prot_mask"], [True, False])
+    np.testing.assert_array_equal(targets["chain_index"], [0, 1])
+    np.testing.assert_array_equal(targets["residue_index"], [10, 20])
+    assert targets["atom_positions"].shape == (2, 65, 3)
+    assert targets["atom_mask"].dtype == np.bool_
+    np.testing.assert_array_equal(targets["atom_mask"].sum(axis=1), [4, 1])
+    assert targets["rigidgroups_gt_exists"][0].any()
+    assert not targets["rigidgroups_gt_exists"][1].any()
+    assert not targets["torsion_angles_mask"][1].any()
+    assert artifact_mapping["extension_targets"]["schema_version"] == 1
+    assert "sequence" not in artifact_mapping
+    return artifact_mapping
 
 
 def _assert_complete_batch(workspace, *, remote: bool = False) -> list[Path | str]:
@@ -131,42 +178,92 @@ def test_download_example_fetches_real_gzip_inputs(doc_workspace):
     assert all(row["map_path"].endswith(".map") for row in rows)
 
 
-def test_single_example_runs_adapter_and_validates_actual_artifact(doc_workspace):
+def test_single_example_runs_default_adapter_and_validates_actual_artifact(
+    doc_workspace,
+):
     artifact = doc_workspace.root / "data/artifacts/example"
     shutil.rmtree(artifact)
     results = [
         doc_workspace.invoke(command)
         for command in get_example("guide-single").commands()
     ]
-    assert len(doc_workspace.adapter_calls) == 1
-    call = doc_workspace.adapter_calls[0]
-    assert call["target_voxel_size"] == 1.5
-    assert call["fix_shift"] is True
-    assert call["interface_contact_cutoff"] == 5.0
-    assert Path(call["artifact_reference"]).resolve() == artifact
+    assert not doc_workspace.adapter_calls
     result = json.loads(results[-1].output)
     actual = validate_preprocessed_artifact(artifact)
     assert result["grid_shape"] == list(actual.grid_shape)
     assert result["protein_nodes"] == actual.protein_nodes == 1
     assert result["nucleotide_nodes"] == actual.nucleotide_nodes == 1
     assert result["component_nodes"] == actual.component_nodes == 1
-    assert load_preprocessed_artifact(artifact)["voxel_size"] == 1.5
+    artifact_mapping = _assert_default_artifact(artifact)
+    assert actual.grid_shape == (86, 86, 86)
+    assert artifact_mapping["voxel_size"] == pytest.approx(128 / 86)
+    metadata = read_metadata(artifact / "metadata.json")
+    assert metadata["format"] == "cryoflake-preprocessed"
+    assert metadata["format_version"] == 1
+    assert set(metadata["files"]) == {"core"}
 
 
 @pytest.mark.parametrize(
     ("flag", "expected"), [("--fix-shift", True), ("--no-fix-shift", False)]
 )
-def test_documented_shift_flags_reach_the_adapter(doc_workspace, flag, expected):
+def test_documented_shift_flags_control_default_origin_translation(
+    doc_workspace, flag, expected
+):
     example = get_example("guide-single")
     assert f"`{flag}`" in example.path.read_text()
     command = next(
         command for command in example.commands() if command[0] == "preprocess"
     )
 
-    doc_workspace.invoke([*command, flag])
+    original_structure = doc_workspace.root / "data/original.cif"
+    lines = (doc_workspace.root / "data/model.cif").read_text().splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(("ATOM ", "HETATM ")):
+            fields = line.split()
+            fields[-3] = str(float(fields[-3]) + 10.0)
+            lines[index] = " ".join(fields)
+    original_structure.write_text("\n".join(lines) + "\n")
 
-    assert len(doc_workspace.adapter_calls) == 1
-    assert doc_workspace.adapter_calls[0]["fix_shift"] is expected
+    doc_workspace.invoke(
+        [*command, "--original-structure-path", str(original_structure), flag]
+    )
+
+    artifact_mapping = load_preprocessed_artifact("data/artifacts/example")
+    np.testing.assert_allclose(
+        artifact_mapping["global_origin"],
+        [-52.0 if expected else -62.0, -62.0, -62.0],
+    )
+    np.testing.assert_allclose(
+        artifact_mapping["backbone_coordinates"]["CA"], [[11.0, 1.0, 1.0]]
+    )
+    assert not doc_workspace.adapter_calls
+
+
+def test_single_default_adapter_accepts_gzip_inputs_and_fasta_metadata(doc_workspace):
+    command = next(
+        command
+        for command in get_example("guide-single").commands()
+        if command[0] == "preprocess"
+    )
+    for argument in (1, 2):
+        source = doc_workspace.root / command[argument]
+        compressed = source.with_name(source.name + ".gz")
+        compressed.write_bytes(gzip.compress(source.read_bytes()))
+        command[argument] = str(compressed)
+    fasta_path = doc_workspace.root / "data/chains.fasta.gz"
+    fasta_path.write_bytes(gzip.compress(b">protein\nA\n"))
+
+    doc_workspace.invoke([*command, "--fasta-path", str(fasta_path)])
+
+    artifact_mapping = _assert_default_artifact("data/artifacts/example")
+    assert artifact_mapping["fasta"] == {
+        "sequences": [{"sequence": "A", "chain_count": 1, "chain_ids": ["A"]}],
+        "sequence_names": ["protein"],
+        "chain_to_seqid": {"A": 0},
+    }
+    assert (
+        validate_preprocessed_artifact("data/artifacts/example").sequence_length is None
+    )
 
 
 @pytest.mark.parametrize(
@@ -219,7 +316,11 @@ def test_cli_batch_example_produces_two_successful_training_artifacts(doc_worksp
         "emd_1234_1abc",
         "emd_5678_2def",
     }
-    assert len(doc_workspace.adapter_calls) == 2
+    assert not doc_workspace.adapter_calls
+    for artifact_reference in paths:
+        artifact_mapping = _assert_default_artifact(artifact_reference)
+        assert artifact_mapping["density_grid"].shape == (128, 128, 128)
+        assert artifact_mapping["voxel_size"] == 1.0
     assert len(doc_workspace.http_calls) == 4
     assert not (doc_workspace.root / "data/summary.csv.checkpoint.json").exists()
     assert not (doc_workspace.root / "data/summary.csv.checkpoint.jsonl").exists()
@@ -232,11 +333,9 @@ def test_python_batch_example_uses_manifest_relative_input_paths(doc_workspace):
     assert {str(Path(path).resolve()) for path in namespace["paths"]} == {
         str(Path(path).resolve()) for path in paths
     }
-    assert len(doc_workspace.adapter_calls) == 2
-    assert all(
-        Path(call["map_path"]).resolve().parent == doc_workspace.root / "data/maps"
-        for call in doc_workspace.adapter_calls
-    )
+    assert not doc_workspace.adapter_calls
+    for artifact_reference in paths:
+        _assert_default_artifact(artifact_reference)
 
 
 def test_cli_embedding_options_generate_and_attach_real_sidecars(doc_workspace):
@@ -340,13 +439,13 @@ def test_replay_options_preserve_report_selection_and_assignments(doc_workspace)
     assert replayed_report["assignments"] == original_report["assignments"]
     assert (doc_workspace.root / "data/train.txt").read_text() == train_before
     assert (doc_workspace.root / "data/valid.txt").read_text() == valid_before
-    assert len(doc_workspace.adapter_calls) == 2
+    assert not doc_workspace.adapter_calls
 
 
 def test_remote_batch_options_upload_artifacts_and_release_local_staging(doc_workspace):
     doc_workspace.invoke(_batch_command() + _options("guide-remote-options"))
     paths = _assert_complete_batch(doc_workspace, remote=True)
-    assert len(doc_workspace.adapter_calls) == 2
+    assert not doc_workspace.adapter_calls
     for path in paths:
         payload = load_preprocessed_artifact(path)
         assert payload["density_grid"].ndim == 3

@@ -69,7 +69,7 @@ def built_distributions(tmp_path_factory):
 
 
 def test_documented_wheel_installation_works_outside_checkout(
-    tmp_path, built_distributions
+    tmp_path, built_distributions, doc_workspace
 ):
     uv, wheel, _ = built_distributions
     working = tmp_path / "application"
@@ -123,6 +123,17 @@ def test_documented_wheel_installation_works_outside_checkout(
     loaded = json.loads(probe.stdout)
     assert Path(loaded["file"]).is_relative_to(environment)
     assert loaded["pipelines"] == ["manifest", "preprocess", "validate"]
+
+    (working / "data").mkdir()
+    for name in ("map.mrc", "model.cif"):
+        shutil.copyfile(doc_workspace.root / "data" / name, working / "data" / name)
+    for command in get_example("guide-single").commands():
+        result = _run(["cryoflake", *command], cwd=working, env=child_env)
+    validated = json.loads(result.stdout)
+    assert validated["grid_shape"] == [86, 86, 86]
+    assert validated["protein_nodes"] == validated["nucleotide_nodes"] == 1
+    assert validated["component_nodes"] == 1
+    assert validated["sequence_length"] is None
 
 
 def test_source_distribution_keeps_documentation_tests_and_public_guides(

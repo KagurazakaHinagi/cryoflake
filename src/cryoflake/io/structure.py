@@ -165,7 +165,7 @@ class DSSPSecondaryStructures:
         return self.residue_to_type.get(chain_id, {}).get(residue_index, "OTHER")
 
 
-def _structure_models(path: str | Path, *, all_models: bool):
+def _structure_models(path: str | Path, *, all_models: bool, extra_fields=None):
     suffix = Path(path).suffix.lower()
     if suffix in {".pdb", ".ent"}:
         source = PDBFile.read(path)
@@ -203,7 +203,7 @@ def _structure_models(path: str | Path, *, all_models: bool):
         raise ValueError(f"Structure contains no models: {path!s}")
     for model in range(1, (model_count if all_models else 1) + 1):
         # Read separately: models can have different atoms and residue topology.
-        atoms = reader(model=model, altloc="all")
+        atoms = reader(model=model, altloc="all", extra_fields=extra_fields)
         if suffix in {".pdb", ".ent"}:
             # Biotite strips the PDB blank-chain identifier; retain stored labels.
             atoms.chain_id = np.where(atoms.chain_id == "", " ", atoms.chain_id)
