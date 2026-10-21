@@ -24,10 +24,18 @@ const html = fs.readFileSync(path.join(path.dirname(appPath), "index.html"), "ut
 const elements = {};
 const pendingTimers = new Map();
 const windowListeners = new Map();
+const mediaListeners = new Set();
 const pendingCommits = [];
-const calls = { volumes: [], updates: [], structures: [], visibility: [], focus: [], select: [], clipboard: [], disposals: 0, reloads: 0, maxConcurrentCommits: 0 };
+const calls = { volumes: [], updates: [], structures: [], visibility: [], focus: [], select: [], clipboard: [], backgrounds: [], viewerOptions: [], cameraResets: 0, disposals: 0, reloads: 0, maxConcurrentCommits: 0 };
 let nextTimer = 0;
 let activeCommits = 0;
+let releaseViewer;
+const mediaQuery = {
+    matches: Boolean(request.systemDark),
+    media: "(prefers-color-scheme: dark)",
+    addEventListener: (name, callback) => { if (name === "change") mediaListeners.add(callback); },
+    removeEventListener: (name, callback) => { if (name === "change") mediaListeners.delete(callback); }
+};
 
 class Element {
     constructor(attributes = {}, tagName = "") {
@@ -43,6 +51,7 @@ class Element {
         this.max = attributes.max || "100";
         this.step = attributes.step || "1";
         this.style = {};
+        this.dataset = {};
         this.scrollHeight = 64;
         this.readOnly = "readonly" in attributes;
         this.selectionStart = 0;
@@ -97,10 +106,11 @@ const viewer = {
     loadVolumeFromUrl: async (...args) => calls.volumes.push(args),
     dispose: () => { calls.disposals++; },
     plugin: {
+        canvas3d: { setProps: props => calls.backgrounds.push(props.renderer.backgroundColor) },
         managers: {
             volume: { hierarchy: volumeHierarchy },
             structure: { hierarchy: { current: { structures: [] }, toggleVisibility: () => {} } },
-            camera: { reset: () => {} }
+            camera: { reset: () => { calls.cameraResets++; } }
         },
         build: () => ({ to: cell => ({ update: updater => ({ commit: async () => {
             calls.updates.push({ cell, parameters: updater({ type: { params: { alpha: 0.25 } } }) });
@@ -114,19 +124,29 @@ const viewer = {
         } }) }) })
     }
 };
-const engine = { Viewer: { create: async () => viewer } };
+const engine = { Viewer: { create: async (_, options) => {
+    calls.viewerOptions.push(options);
+    if (request.deferViewer) await new Promise(resolve => { releaseViewer = resolve; });
+    return viewer;
+} } };
+const documentElement = new Element({}, "html");
 const context = {
     document: {
+        documentElement,
         getElementById: id => {
             if (!elements[id]) throw new Error(`Unknown HTML element ${id}`);
             return elements[id];
         },
         createElement: tagName => new Element({}, tagName),
         createDocumentFragment: () => new Element({}, "#document-fragment"),
-        head: { append: script => Promise.resolve().then(() => script.onload()) }
+        head: { append: script => Promise.resolve().then(() => request.engineFailure ? script.onerror() : script.onload()) }
     },
     window: {
         molstar: engine,
+        matchMedia: query => {
+            if (query !== mediaQuery.media) throw new Error(`Unexpected media query ${query}`);
+            return mediaQuery;
+        },
         location: { href: "http://127.0.0.1:8888/", reload: () => { calls.reloads++; } },
         addEventListener: (name, callback, options) => windowListeners.set(name, { callback, options })
     },
@@ -153,8 +173,18 @@ async function settle() {
             value: element.value, text: element.textContent, min: element.min, max: element.max,
             disabled: element.disabled, checked: element.checked, hidden: element.hidden,
             invalid: element.attributes["aria-invalid"], expanded: element.attributes["aria-expanded"],
-            type: element.attributes.type
+            type: element.attributes.type, role: element.attributes.role,
+            media: element.media || element.attributes.media,
+            ariaChecked: element.attributes["aria-checked"], label: element.attributes["aria-label"],
+            title: element.title || element.attributes.title
         }]));
+        state.theme = {
+            selected: documentElement.dataset.theme,
+            mediaListenerCount: mediaListeners.size,
+            background: calls.backgrounds.at(-1),
+            backgroundUpdateCount: calls.backgrounds.length,
+            cameraResets: calls.cameraResets
+        };
         state.sequenceItems = elements.sequences.children.map(section => {
             const [heading, sequence] = section.children;
             return {
@@ -183,7 +213,14 @@ async function settle() {
     }
     snapshots.push(snapshot());
     for (const action of request.actions || []) {
-        if (action.releaseCommit) {
+        if ("systemDark" in action) {
+            mediaQuery.matches = action.systemDark;
+            for (const callback of mediaListeners) callback(mediaQuery);
+        } else if (action.releaseViewer) {
+            if (!releaseViewer) throw new Error("No deferred viewer creation to release");
+            releaseViewer();
+            releaseViewer = undefined;
+        } else if (action.releaseCommit) {
             const commit = pendingCommits.shift();
             if (!commit) throw new Error("No deferred renderer commit to release");
             if (action.error) commit.reject(new Error(action.error));
@@ -221,7 +258,15 @@ async function settle() {
 """
 
 
-def _run_controls(actions=(), *, chains=(), defer_commits=False):
+def _run_controls(
+    actions=(),
+    *,
+    chains=(),
+    defer_commits=False,
+    system_dark=False,
+    defer_viewer=False,
+    engine_failure=False,
+):
     node = shutil.which("node")
     if node is None:
         if os.environ.get("CI"):
@@ -241,6 +286,9 @@ def _run_controls(actions=(), *, chains=(), defer_commits=False):
                 },
                 "actions": actions,
                 "deferCommits": defer_commits,
+                "systemDark": system_dark,
+                "deferViewer": defer_viewer,
+                "engineFailure": engine_failure,
             }
         ),
         capture_output=True,
@@ -256,6 +304,134 @@ def test_ci_requires_node_for_offline_viewer_regressions(monkeypatch):
     monkeypatch.setenv("CI", "true")
     with pytest.raises(pytest.fail.Exception, match="Node.js 22 is required in CI"):
         _run_controls()
+
+
+TOGGLE_THEME = {"id": "theme-toggle", "event": "click"}
+
+
+@pytest.mark.parametrize("system_dark", [False, True])
+def test_theme_starts_with_system_setting_and_accessible_switch(system_dark):
+    result = _run_controls(system_dark=system_dark)
+    initial = result["snapshots"][0]
+    assert initial["theme"]["selected"] == ("dark" if system_dark else "light")
+    assert initial["theme-toggle"]["role"] == "switch"
+    assert initial["theme-toggle"]["label"] == "Dark mode"
+    assert initial["theme-toggle"]["ariaChecked"] == str(system_dark).lower()
+    assert initial["theme-label"]["text"] == ("Dark" if system_dark else "Light")
+    assert initial["molstar-dark-theme"]["media"] == (
+        "all" if system_dark else "not all"
+    )
+    assert initial["theme"]["background"] == (0x101820 if system_dark else 0xF9FBFC)
+    assert len(result["calls"]["viewerOptions"]) == 1
+    assert result["calls"]["viewerOptions"][0]["viewportBackgroundColor"] == (
+        "#101820" if system_dark else "#f9fbfc"
+    )
+    assert initial["theme"]["mediaListenerCount"] == 1
+    assert initial["error"]["hidden"]
+
+
+@pytest.mark.parametrize("system_dark", [False, True])
+def test_theme_switch_toggles_both_directions_without_recreating_viewer(system_dark):
+    result = _run_controls([TOGGLE_THEME, TOGGLE_THEME], system_dark=system_dark)
+    initial, first, second = result["snapshots"]
+    assert first["theme"]["selected"] == ("light" if system_dark else "dark")
+    assert first["theme-toggle"]["ariaChecked"] == str(not system_dark).lower()
+    assert first["molstar-dark-theme"]["media"] == ("not all" if system_dark else "all")
+    assert second["theme"]["selected"] == initial["theme"]["selected"]
+    assert second["theme-toggle"]["ariaChecked"] == str(system_dark).lower()
+    assert (
+        second["molstar-dark-theme"]["media"] == initial["molstar-dark-theme"]["media"]
+    )
+    assert first["theme"]["background"] != initial["theme"]["background"]
+    assert second["theme"]["background"] == initial["theme"]["background"]
+    assert len(result["calls"]["viewerOptions"]) == 1
+    assert len(result["calls"]["volumes"]) == 1
+    assert len(result["calls"]["structures"]) == 1
+    assert result["calls"]["updates"] == []
+    assert result["calls"]["cameraResets"] == 1
+
+
+def test_system_theme_changes_follow_until_user_selects_a_mode():
+    result = _run_controls(
+        [
+            {"systemDark": True},
+            {"systemDark": False},
+            TOGGLE_THEME,
+            {"systemDark": True},
+            {"systemDark": False},
+        ]
+    )
+    assert [snapshot["theme"]["selected"] for snapshot in result["snapshots"]] == [
+        "light",
+        "dark",
+        "light",
+        "dark",
+        "dark",
+        "dark",
+    ]
+    chosen = result["snapshots"][3]
+    after_system_change = result["snapshots"][-1]
+    assert chosen["theme"]["background"] == after_system_change["theme"]["background"]
+    assert after_system_change["theme-toggle"]["ariaChecked"] == "true"
+
+
+@pytest.mark.parametrize("toggle_while_loading", [False, True])
+def test_latest_theme_is_applied_when_viewer_finishes_loading(toggle_while_loading):
+    actions = [TOGGLE_THEME] if toggle_while_loading else [{"systemDark": True}]
+    actions.append({"releaseViewer": True})
+    result = _run_controls(actions, defer_viewer=True)
+    initial, changing, loaded = result["snapshots"]
+    assert initial["theme"]["selected"] == "light"
+    assert changing["theme"]["selected"] == "dark"
+    assert loaded["theme"]["selected"] == "dark"
+    assert loaded["theme-toggle"]["ariaChecked"] == "true"
+    assert loaded["theme"]["background"] == 0x101820
+    assert loaded["molstar-dark-theme"]["media"] == "all"
+    assert result["calls"]["viewerOptions"][0]["viewportBackgroundColor"] == "#f9fbfc"
+    assert len(result["calls"]["volumes"]) == 1
+    assert loaded["error"]["hidden"]
+
+
+def test_theme_changes_preserve_density_values_visibility_and_camera():
+    result = _run_controls(
+        [
+            {"id": "density-level", "event": "input", "value": "2.125"},
+            {"id": "density-opacity", "event": "input", "value": "0.48"},
+            {"id": "show-density", "event": "change", "checked": False},
+            TOGGLE_THEME,
+        ]
+    )
+    before, after = result["snapshots"][-2:]
+    assert before["theme"]["selected"] == "light"
+    assert after["theme"]["selected"] == "dark"
+    for control in ["density-level", "density-opacity", "show-density"]:
+        assert after[control] == before[control]
+    assert after["renderer"] == before["renderer"]
+    assert result["calls"]["visibility"] == ["hide"]
+    assert result["calls"]["cameraResets"] == 1
+
+
+def test_theme_switch_remains_available_if_molstar_engine_fails():
+    result = _run_controls([TOGGLE_THEME], engine_failure=True)
+    initial, switched = result["snapshots"]
+    assert not initial["error"]["hidden"]
+    assert initial["theme"]["selected"] == "light"
+    assert switched["theme"]["selected"] == "dark"
+    assert switched["theme-toggle"]["ariaChecked"] == "true"
+    assert result["calls"]["backgrounds"] == []
+    assert result["calls"]["viewerOptions"] == []
+
+
+def test_pagehide_removes_system_theme_listener_and_ignores_late_changes():
+    result = _run_controls(
+        [{"windowEvent": "pagehide"}, {"systemDark": True}, TOGGLE_THEME]
+    )
+    initial, hidden, changed, clicked = result["snapshots"]
+    assert initial["theme"]["mediaListenerCount"] == 1
+    assert hidden["theme"]["mediaListenerCount"] == 0
+    for disposed_snapshot in [changed, clicked]:
+        assert disposed_snapshot["theme"] == hidden["theme"]
+    assert result["calls"]["disposals"] == 1
 
 
 def _edit_action(event, *, value=None, key=None):

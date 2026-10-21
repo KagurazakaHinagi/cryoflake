@@ -14,6 +14,10 @@
     let densityOpacityPercent = 25;
     let densityOpacityPercentAtEditStart = 25;
     let editingDensityOpacity = false;
+    const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const viewportBackgroundColors = { light: "#f9fbfc", dark: "#101820" };
+    let currentTheme = systemThemeQuery.matches ? "dark" : "light";
+    let followsSystemTheme = true;
 
     function reportError(error) {
         if (disposed) return;
@@ -21,6 +25,25 @@
         byId("error-message").textContent = error.message || String(error);
         byId("error").hidden = false;
         byId("session-status").textContent = "Visualization unavailable · downloads ready";
+    }
+
+    function applyTheme(theme) {
+        if (disposed) return;
+        currentTheme = theme;
+        const dark = theme === "dark";
+        document.documentElement.dataset.theme = theme;
+        byId("theme-toggle").setAttribute("aria-checked", String(dark));
+        byId("theme-toggle").title = `Switch to ${dark ? "light" : "dark"} mode`;
+        byId("theme-icon").textContent = dark ? "☾" : "☀";
+        byId("theme-label").textContent = dark ? "Dark" : "Light";
+        byId("molstar-dark-theme").media = dark ? "all" : "not all";
+        viewer?.plugin.canvas3d?.setProps({
+            renderer: { backgroundColor: Number.parseInt(viewportBackgroundColors[theme].slice(1), 16) }
+        });
+    }
+
+    function followSystemTheme(event) {
+        if (followsSystemTheme) applyTheme(event.matches ? "dark" : "light");
     }
 
     function showSummary(summary) {
@@ -297,6 +320,13 @@
     }
 
     async function start() {
+        applyTheme(currentTheme);
+        byId("theme-toggle").addEventListener("click", () => {
+            if (disposed) return;
+            followsSystemTheme = false;
+            applyTheme(currentTheme === "dark" ? "light" : "dark");
+        });
+        systemThemeQuery.addEventListener("change", followSystemTheme);
         window.addEventListener("pageshow", event => {
             if (event.persisted) window.location.reload();
         });
@@ -304,6 +334,7 @@
             disposed = true;
             clearTimeout(densityTimer);
             densityUpdatePending = false;
+            systemThemeQuery.removeEventListener("change", followSystemTheme);
             viewer?.dispose();
         }, { once: true });
         byId("reload").addEventListener("click", () => window.location.reload());
@@ -325,9 +356,10 @@
             layoutShowLeftPanel: false,
             viewportShowExpand: false,
             volumeStreamingDisabled: true,
-            viewportBackgroundColor: "#f9fbfc"
+            viewportBackgroundColor: viewportBackgroundColors[currentTheme]
         });
         if (disposed) { viewer.dispose(); return; }
+        applyTheme(currentTheme);
         byId("loading-message").textContent = "Loading reconstructed atomic structure…";
         await viewer.loadStructureFromUrl(new URL("/structure.cif", window.location.href).href, "mmcif", false, { label: "Reconstructed artifact" });
         if (disposed) return;

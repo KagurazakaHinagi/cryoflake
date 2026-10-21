@@ -46,6 +46,9 @@ data is served locally and is not uploaded to the CDN.
 Use the structure and sequence controls to inspect residues alongside the
 density overlay. The page provides density visibility, contour, and opacity
 controls, along with downloads of the reconstructed data.
+The light/dark switch in the upper-right corner changes the page and viewer
+appearance. The page starts with your system's color setting and follows system
+changes until you choose a mode. Your choice lasts until you reload the page.
 Browser download filenames include the artifact folder name as a prefix:
 an artifact in `data/artifacts/example` saves as `example_structure.cif`,
 `example_density.mrc`, `example_sequence.fasta`, and `example_summary.json`.
