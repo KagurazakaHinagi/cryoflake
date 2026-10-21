@@ -8,12 +8,22 @@ from types import ModuleType
 
 import pytest
 from omegaconf import OmegaConf
+from typer import rich_utils
 from typer.testing import CliRunner
 
 from cryoflake import cli
 from cryoflake.storage.artifacts import ArtifactValidationResult
 
 runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "160"})
+
+
+@pytest.fixture(autouse=True)
+def stable_cli_rendering(monkeypatch):
+    # Typer captures CI color flags at import time. Forced terminal rendering
+    # makes TERM=dumb use 80 columns regardless of COLUMNS and can add ANSI
+    # styles within option names. Keep help/error assertions independent of it.
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", False)
+    monkeypatch.setattr(rich_utils, "MAX_WIDTH", 160)
 
 
 def _install_adapter(monkeypatch, function):
