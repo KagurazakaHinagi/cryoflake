@@ -47,6 +47,15 @@ def test_removed_forwarding_apis_are_absent(module_name, removed_names):
         assert not hasattr(module, name)
 
 
+@pytest.mark.parametrize(
+    "module_name",
+    ["cryoflake.preprocess.adapters", "cryoflake.preprocess.adapters.default"],
+)
+def test_removed_preprocess_adapter_namespace_is_not_importable(module_name):
+    with pytest.raises(ModuleNotFoundError, match=r"cryoflake\.preprocess\.adapters"):
+        import_module(module_name)
+
+
 def test_public_convenience_exports_share_the_canonical_implementation():
     import cryoflake
     import cryoflake.storage as storage

@@ -210,7 +210,7 @@ For a generated or hand-edited manifest, use the direct Python API:
 
 <!-- doc-example: guide-batch-python; mode=python -->
 ```python
-from cryoflake.preprocess.adapters.default import run as adapter
+from cryoflake.adapters.preprocess.default import run as adapter
 from cryoflake.preprocess.manifest import preprocess_manifest_csv
 
 paths = preprocess_manifest_csv(

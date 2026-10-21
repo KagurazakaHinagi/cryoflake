@@ -109,7 +109,7 @@ The result contains `artifact_reference`, `grid_shape`, `protein_nodes`,
 
 ## Built-in preprocessing adapter
 
-`cryoflake.preprocess.adapters.default.run(*, map_path, structure_path, artifact_reference, target_voxel_size=1.0, original_structure_path=None, fasta_path=None, fix_shift=True, interface_contact_cutoff=5.0, s3_endpoint_url=None)`
+`cryoflake.adapters.preprocess.default.run(*, map_path, structure_path, artifact_reference, target_voxel_size=1.0, original_structure_path=None, fasta_path=None, fix_shift=True, interface_contact_cutoff=5.0, s3_endpoint_url=None)`
 is the callable selected by CLI `--preprocess-adapter default`. Call it directly
 or inject it into a Python pipeline. It returns `None` after writing a complete
 NPZ+JSON training artifact locally or to S3. It uses CPU map preparation and

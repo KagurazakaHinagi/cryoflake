@@ -12,9 +12,9 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
+from cryoflake.adapters.preprocess import default
 from cryoflake.cli import app
 from cryoflake.io.mrc import save_mrc
-from cryoflake.preprocess.adapters import default
 from cryoflake.storage import load_preprocessed_artifact, transports
 from cryoflake.storage.artifacts import validate_preprocessed_artifact
 from cryoflake.targets.structure import load_full_atom_targets_from_structure

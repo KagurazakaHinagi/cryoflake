@@ -116,7 +116,7 @@ def _adapter(
     if specification is None:
         return None
     if option == "--preprocess-adapter" and specification == "default":
-        from cryoflake.preprocess.adapters.default import run
+        from cryoflake.adapters.preprocess.default import run
 
         return run
     try:

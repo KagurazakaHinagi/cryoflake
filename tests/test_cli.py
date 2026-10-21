@@ -41,10 +41,12 @@ def _source_csv(tmp_path):
 
 
 def test_builtin_default_preprocessor_resolves_to_canonical_callable():
-    from cryoflake.preprocess.adapters.default import run
+    from cryoflake.adapters.preprocess.default import run
 
     assert cli._adapter("default") is run
-    assert cli._adapter("cryoflake.preprocess.adapters.default:run") is run
+    assert cli._adapter("cryoflake.adapters.preprocess.default:run") is run
+    with pytest.raises(typer.BadParameter, match="Cannot load preprocess-adapter"):
+        cli._adapter("cryoflake.preprocess.adapters.default:run")
     with pytest.raises(typer.BadParameter, match="MODULE:CALLABLE"):
         cli._adapter("default", option="--sequence-embedding-generator")
 
@@ -53,7 +55,7 @@ def test_builtin_default_preprocessor_resolves_to_canonical_callable():
 def test_manifest_resolves_builtin_default_adapter_from_cli_configuration(
     tmp_path, monkeypatch, selection
 ):
-    from cryoflake.preprocess.adapters.default import run
+    from cryoflake.adapters.preprocess.default import run
 
     calls = []
 
