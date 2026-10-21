@@ -427,12 +427,28 @@ def _required_stores(
     *,
     root_keys: Sequence[str] | None = None,
 ) -> set[str]:
-    tree = _selected_tree(metadata["tree"], root_keys)
-    specs: dict[tuple[str, str], tuple[np.dtype, tuple[int, ...]]] = {}
-    _collect_array_specs(tree, specs)
-    stores = {store for store, _ in specs}
+    # Metadata has already established that the store declaration and complete
+    # array tree agree. A full read needs every declared store, including an
+    # otherwise empty core archive containing only its generation marker.
     if root_keys is None:
-        stores.add("core")
+        return set(metadata["files"])
+    tree = _selected_tree(metadata["tree"], root_keys)
+
+    def contains_stored_data(node: Mapping[str, object]) -> bool:
+        kind = node["kind"]
+        if kind in {"array", "bytes"}:
+            return True
+        if kind in {"mapping", "namedtuple"}:
+            return any(contains_stored_data(child) for child in node["items"].values())
+        if kind == "sequence":
+            return any(contains_stored_data(child) for child in node["items"])
+        return False
+
+    stores = set()
+    for root_key, node in tree["items"].items():
+        store = "sequence" if root_key in SEQUENCE_ROOT_KEYS else "core"
+        if store not in stores and contains_stored_data(node):
+            stores.add(store)
     return stores
 
 

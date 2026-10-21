@@ -1,4 +1,5 @@
 schema_version: 1
+full_atom_schema_version: 1
 full_atom_count: 65
 rigid_group_count: 9
 torsion_count: 8

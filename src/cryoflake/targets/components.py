@@ -12,6 +12,8 @@ from collections.abc import Sequence
 import numpy as np
 
 from cryoflake import constants
+from cryoflake.common import array_all_finite
+from cryoflake.metadata import validate_global_origin, validate_voxel_size
 from cryoflake.targets import schema
 from cryoflake.targets.common import (
     _anchor_and_reference,
@@ -86,10 +88,12 @@ def _normalize_polymer_context(
         positions.ndim != 2
         or positions.shape[1:] != (3,)
         or positions.dtype.kind not in {"f", "i", "u"}
-        or not np.isfinite(positions).all()
     ):
         raise ValueError("polymer_atom_positions must be a finite numeric (A, 3) array")
-    positions = positions.astype(np.float32, copy=False)
+    with np.errstate(over="ignore", invalid="ignore"):
+        positions = positions.astype(np.float32, copy=False)
+    if not array_all_finite(positions):
+        raise ValueError("polymer_atom_positions must be a finite float32 (A, 3) array")
     if polymer_atom_node_indices is None:
         if len(positions) == 0 and not any(
             value is not None for value in topology_values
@@ -104,14 +108,13 @@ def _normalize_polymer_context(
             "polymer chain, residue, and aatype arrays are required with polymer atoms"
         )
 
-    node_indices = np.asarray(polymer_atom_node_indices)
-    if (
-        node_indices.shape != (len(positions),)
-        or node_indices.dtype.kind not in {"i", "u"}
-        or np.any(node_indices < 0)
-    ):
+    node_indices = schema._integer_array(
+        polymer_atom_node_indices,
+        (len(positions),),
+        "polymer_atom_node_indices",
+    )
+    if np.any(node_indices < 0):
         raise ValueError("polymer_atom_node_indices must be non-negative integer (A,)")
-    node_indices = node_indices.astype(np.int64, copy=False)
     minimum_nodes = int(node_indices.max()) + 1 if len(node_indices) else 0
     topology = []
     for name, value in zip(
@@ -129,7 +132,7 @@ def _normalize_polymer_context(
                 if name != "aatype"
                 else "polymer_aatype must cover every polymer node"
             )
-        topology.append(array.astype(np.int64, copy=False))
+        topology.append(schema._integer_array(array, array.shape, f"polymer_{name}"))
     if len({len(array) for array in topology}) != 1:
         raise ValueError("polymer topology arrays must have matching lengths")
     return positions, node_indices, tuple(topology)
@@ -139,11 +142,10 @@ def _interface_metadata(
     nodes: Sequence[_Node],
     polymer_context,
     cutoff: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    interface_mask = np.zeros(len(nodes), dtype=bool)
+) -> np.ndarray:
     signatures = [""] * len(nodes)
     if polymer_context is None or len(polymer_context[0]) == 0:
-        return interface_mask, _string_array(signatures)
+        return _string_array(signatures)
 
     polymer_positions, atom_node_indices, topology = polymer_context
     cutoff_square = float(cutoff) ** 2
@@ -156,7 +158,6 @@ def _interface_metadata(
         )
         if not np.any(contacting_atoms):
             continue
-        interface_mask[node_index] = True
         contacting_nodes = np.unique(atom_node_indices[contacting_atoms])
         fingerprint_rows = sorted(
             {
@@ -170,7 +171,7 @@ def _interface_metadata(
         )
         digest = hashlib.sha256(repr(fingerprint_rows).encode()).hexdigest()[:16]
         signatures[node_index] = f"{node.component_id}|{digest}"
-    return interface_mask, _string_array(signatures)
+    return _string_array(signatures)
 
 
 def _grid_valid_mask(
@@ -179,27 +180,17 @@ def _grid_valid_mask(
     voxel_size,
     grid_shape,
 ) -> np.ndarray:
-    origin = np.asarray(global_origin)
+    origin = validate_global_origin(global_origin)
     shape = np.asarray(grid_shape)
-    if (
-        origin.shape != (3,)
-        or origin.dtype.kind not in {"f", "i", "u"}
-        or not np.isfinite(origin).all()
-    ):
-        raise ValueError("global_origin must be a finite numeric 3-vector")
     if shape.shape != (3,) or shape.dtype.kind not in {"i", "u"} or np.any(shape <= 0):
         raise ValueError("grid_shape must contain three positive integers")
-    try:
-        voxel_size = float(voxel_size)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("voxel_size must be positive and finite") from exc
-    if not np.isfinite(voxel_size) or voxel_size <= 0:
-        raise ValueError("voxel_size must be positive and finite")
-    voxel_positions = (positions - origin.astype(np.float32, copy=False)) / voxel_size
-    shape_xyz = shape[::-1].astype(np.float32, copy=False)
+    voxel_size = validate_voxel_size(voxel_size)
+    shifted_positions = np.subtract(positions, origin, dtype=np.float64)
+    with np.errstate(over="ignore"):
+        extent_xyz = shape[::-1].astype(np.float64, copy=False) * voxel_size
     return np.logical_and(
-        voxel_positions >= 0,
-        voxel_positions < shape_xyz,
+        shifted_positions >= 0,
+        shifted_positions < extent_xyz,
     ).all(axis=-1)
 
 
@@ -236,7 +227,6 @@ def build_component_extension_targets(
     anchor_kind = np.zeros(num_nodes, dtype=np.int64)
     reference = np.zeros((num_nodes, 3, 3), dtype=np.float32)
     atom_positions = np.zeros((num_nodes, max_atoms, 3), dtype=np.float32)
-    atom_mask = np.zeros((num_nodes, max_atoms), dtype=bool)
     atom_name_width = max(
         (len(atom.name) for node in nodes for atom in node.atoms),
         default=1,
@@ -266,7 +256,6 @@ def build_component_extension_targets(
         polymer_kind[node_index] = node.polymer_kind
         for atom_index, atom in enumerate(node.atoms):
             atom_positions[node_index, atom_index] = atom.position
-            atom_mask[node_index, atom_index] = True
             atom_names[node_index, atom_index] = atom.name
             atom_elements[node_index, atom_index] = atom.element
             b_factors[node_index, atom_index] = atom.b_factor
@@ -279,7 +268,7 @@ def build_component_extension_targets(
         polymer_residue_indices,
         polymer_aatype,
     )
-    interface_mask, interface_group_id = _interface_metadata(
+    interface_group_id = _interface_metadata(
         nodes,
         polymer_context,
         interface_contact_cutoff,
@@ -289,27 +278,6 @@ def build_component_extension_targets(
         global_origin,
         voxel_size,
         grid_shape,
-    )
-    component_groups = tuple(
-        sorted(
-            {
-                node.component_id
-                for node in nodes
-                if node.node_kind != int(constants.NodeKind.WATER)
-            }
-        )
-    )
-    interface_groups = tuple(
-        sorted(
-            {
-                str(group_id)
-                for group_id, is_interface in zip(
-                    interface_group_id,
-                    interface_mask,
-                )
-                if is_interface
-            }
-        )
     )
     extension_targets = {
         "schema_version": constants.COMPONENT_EXTENSION_SCHEMA_VERSION,
@@ -331,22 +299,15 @@ def build_component_extension_targets(
                 [node.source_chem_comp_type for node in nodes]
             ),
             "atom_positions": atom_positions,
-            "atom_mask": atom_mask,
             "atom_names": atom_names,
             "atom_elements": atom_elements,
             "b_factors": b_factors,
             "occupancies": occupancies,
-            "interface_mask": interface_mask,
             "interface_group_id": interface_group_id,
             "interface_contact_cutoff": interface_contact_cutoff,
             "proposal_targets": {
                 "node_indices": np.arange(num_nodes, dtype=np.int64),
-                "positions": positions.copy(),
                 "valid_mask": proposal_valid_mask,
-            },
-            "split_groups": {
-                "component": component_groups,
-                "interface": interface_groups,
             },
         },
     }

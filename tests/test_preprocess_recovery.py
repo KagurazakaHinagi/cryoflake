@@ -1143,17 +1143,18 @@ def test_manifest_workers_share_the_aggregate_memory_budget(
         },
     )
     monkeypatch.setattr(
-        worker, "_preprocessed_artifact_is_reusable", lambda *args, **kwargs: True
-    )
-    monkeypatch.setattr(
-        "cryoflake.targets.schema.validate_component_extension_targets",
-        lambda value: {
-            "component": {
+        worker,
+        "_validate_training_artifact_mapping",
+        lambda *args, **kwargs: SimpleNamespace(
+            grid_shape=(2, 2, 2),
+            voxel_size=1.0,
+            component_targets={
                 "positions": np.zeros((0, 3), dtype=np.float32),
-                "interface_mask": np.zeros(0, dtype=bool),
-                "split_groups": {"component": (), "interface": ()},
-            }
-        },
+                "component_id": np.empty(0, dtype=str),
+                "node_kind": np.empty(0, dtype=np.int64),
+                "interface_group_id": np.empty(0, dtype=str),
+            },
+        ),
     )
 
     artifact_references = []

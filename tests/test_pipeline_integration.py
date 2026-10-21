@@ -12,7 +12,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cryoflake.constants import FULL_ATOM_COUNT, RIGID_GROUP_COUNT, TORSION_COUNT
+from cryoflake.constants import (
+    FULL_ATOM_COUNT,
+    FULL_ATOM_TARGET_SCHEMA_VERSION,
+    RIGID_GROUP_COUNT,
+    TORSION_COUNT,
+)
 from cryoflake.io.mrc import load_mrc, save_mrc
 from cryoflake.io.structure import load_full_backbone_from_structure
 from cryoflake.manifests.manifest import read_artifact_list
@@ -77,12 +82,13 @@ HETATM O1 . LIG C 3 . C 30 ? 1 O 1.0 20.0 1.5 2.0 1.0
 
 
 def _full_atom_fixture():
-    """Two canonical nodes with unavailable geometry explicitly masked artifact_reference."""
+    """Two canonical nodes with unavailable geometry explicitly masked."""
     targets = {
+        "schema_version": FULL_ATOM_TARGET_SCHEMA_VERSION,
         "aatype": np.asarray([0, 24], dtype=np.int64),
-        "prot_mask": np.asarray([True, False]),
         "chain_index": np.asarray([0, 1], dtype=np.int64),
         "residue_index": np.asarray([10, 20], dtype=np.int64),
+        "atom_names": np.asarray([f"C{slot}" for slot in range(FULL_ATOM_COUNT)]),
     }
     shapes = {
         "atom_positions": (FULL_ATOM_COUNT, 3),
@@ -138,6 +144,11 @@ def test_artifact_validation_counts_normalized_single_coordinates(
     result = validate_preprocessed_artifact(root)
 
     assert result.protein_nodes == result.nucleotide_nodes == 1
+    restored_targets = load_preprocessed_artifact(root)["full_atom_targets"]
+    assert restored_targets["atom_names"].shape == (65,)
+    assert restored_targets["atom_names"].dtype.kind == "U"
+    assert restored_targets["atom_names"].tolist() == [f"C{slot}" for slot in range(65)]
+    assert not restored_targets["atom_mask"].any()
 
 
 class _CPUAdapter:
@@ -342,11 +353,21 @@ def test_compressed_manifest_pipeline_validates_resumes_and_reuses(tmp_path):
         assert loaded["extension_targets"]["component"]["component_id"].tolist() == [
             "LIG"
         ]
-        assert loaded["extension_targets"]["component"]["interface_mask"].tolist() == [
-            True
-        ]
+        component = loaded["extension_targets"]["component"]
+        assert (component["interface_group_id"] != "").tolist() == [True]
+        assert "prot_mask" not in loaded["full_atom_targets"]
+        assert not {"atom_mask", "interface_mask", "split_groups"}.intersection(
+            component
+        )
+        assert "positions" not in component["proposal_targets"]
         with np.load(artifact / "core.npz", allow_pickle=False) as archive:
             assert archive.files
+            assert not {
+                "full_atom_targets/prot_mask",
+                "extension_targets/component/atom_mask",
+                "extension_targets/component/interface_mask",
+                "extension_targets/component/proposal_targets/positions",
+            }.intersection(archive.files)
         assert validate_preprocessed_artifact(artifact).grid_shape == grid.shape
 
     # Completion clears the checkpoint, so another run exercises actual reuse.

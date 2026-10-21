@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
@@ -51,79 +52,128 @@ def _materialize_preprocess_input(input_path: Path, temporary_dir: Path) -> Path
     return materialized_path
 
 
-def _coordinate_count(
-    coordinates,
-    allow_nan: bool = False,
-) -> Optional[int]:
-    try:
-        coordinates = validate_coordinates(coordinates, allow_nan=allow_nan)
-    except Exception:
-        return None
-    return int(coordinates.shape[0])
+@dataclass(frozen=True)
+class _ValidatedTrainingArtifact:
+    grid_shape: tuple[int, int, int]
+    voxel_size: float
+    protein_nodes: int
+    nucleotide_nodes: int
+    component_targets: dict
+    sequence_shape: tuple[int, int] | None
 
 
 def _coordinates_have_grid_targets(
-    coordinate_payloads: Iterable[object],
+    coordinate_arrays: Iterable[np.ndarray],
     grid_shape: tuple[int, int, int],
     global_origin: np.ndarray,
     voxel_size: float,
-    allow_nan: bool = False,
 ) -> bool:
-    grid_shape_xyz = np.asarray(grid_shape[::-1], dtype=np.float32)
-    global_origin = np.asarray(global_origin, dtype=np.float32)
-    for coordinates in coordinate_payloads:
-        try:
-            coordinates = validate_coordinates(coordinates, allow_nan=allow_nan)
-        except Exception:
-            return False
-        if coordinates.size == 0:
-            continue
-        finite_mask = np.isfinite(coordinates).all(axis=-1)
-        if not np.any(finite_mask):
-            continue
-        voxel_coordinates_xyz = (coordinates[finite_mask] - global_origin) / float(
-            voxel_size
-        )
-        inside_mask = np.logical_and(
-            voxel_coordinates_xyz >= 0,
-            voxel_coordinates_xyz < grid_shape_xyz,
-        ).all(axis=-1)
-        if np.any(inside_mask):
-            return True
+    """Check validated coordinates with workspace bounded by one chunk."""
+
+    with np.errstate(over="ignore"):
+        grid_extent_xyz = np.asarray(grid_shape[::-1], dtype=np.float64) * voxel_size
+    for coordinates in coordinate_arrays:
+        for start in range(0, len(coordinates), 65536):
+            # Compare world-space differences without division: very small or
+            # large positive spacing must not turn zeros into NaNs or negative
+            # coordinates into -0. Float64 also prevents float32 subtraction
+            # overflow. NaNs fail the comparisons without a filtered copy.
+            shifted_coordinates_xyz = np.subtract(
+                coordinates[start : start + 65536], global_origin, dtype=np.float64
+            )
+            inside_mask = np.logical_and(
+                shifted_coordinates_xyz >= 0,
+                shifted_coordinates_xyz < grid_extent_xyz,
+            ).all(axis=-1)
+            if np.any(inside_mask):
+                return True
     return False
 
 
-def _residue_labels_are_valid(
-    labels,
-    expected_count: int,
-    allowed_labels: set[str],
-) -> bool:
-    try:
-        validate_residue_labels(
-            labels,
-            expected_count=expected_count,
-            allowed_labels=allowed_labels,
+def _validate_training_artifact_mapping(
+    artifact_mapping: object,
+    *,
+    expected_interface_contact_cutoff: Optional[float] = None,
+    require_sequence_embeddings: bool = False,
+) -> _ValidatedTrainingArtifact:
+    """Validate once and retain only details needed by callers and summaries."""
+
+    if not isinstance(artifact_mapping, Mapping):
+        raise ValueError("Preprocessed artifact must be a mapping.")
+    from cryoflake.targets.schema import validate_component_extension_targets
+
+    component_targets = validate_component_extension_targets(
+        artifact_mapping.get("extension_targets")
+    )["component"]
+    if expected_interface_contact_cutoff is not None and not np.isclose(
+        component_targets["interface_contact_cutoff"],
+        float(expected_interface_contact_cutoff),
+        rtol=0.0,
+        atol=1e-8,
+    ):
+        raise ValueError("Component interface contact cutoff does not match.")
+    sequence_shape = None
+    if require_sequence_embeddings or {"sequence", "sequence_mask"}.intersection(
+        artifact_mapping
+    ):
+        sequence_shape = tuple(
+            int(size)
+            for size in validate_sequence_embedding_payload(artifact_mapping)[
+                "sequence"
+            ].shape
         )
-    except ValueError:
-        return False
-    return True
+    grid = validate_density_grid(artifact_mapping.get("density_grid"))
+    global_origin = validate_global_origin(artifact_mapping.get("global_origin"))
+    voxel_size = validate_voxel_size(artifact_mapping.get("voxel_size"))
 
-
-def _residue_info_matches_counts(
-    residue_info,
-    num_protein: int,
-    num_nucleotide: int,
-) -> bool:
+    backbone_coordinates = artifact_mapping.get("backbone_coordinates")
+    residue_info = artifact_mapping.get("residue_info")
+    backbone_atoms = {*BACKBONE_ATOM_NAMES, "P"}
+    if not isinstance(backbone_coordinates, Mapping) or not backbone_atoms.issubset(
+        backbone_coordinates
+    ):
+        raise ValueError("Preprocessed artifact must contain all backbone atom arrays.")
+    coordinates = {
+        atom_name: validate_coordinates(backbone_coordinates[atom_name], allow_nan=True)
+        for atom_name in backbone_atoms
+    }
+    num_protein = len(coordinates["CA"])
+    num_nucleotide = len(coordinates["P"])
+    if any(len(coordinates[name]) != num_protein for name in BACKBONE_ATOM_NAMES):
+        raise ValueError("Protein backbone atom arrays must have matching row counts.")
+    validate_full_atom_targets(
+        artifact_mapping.get("full_atom_targets"),
+        num_protein=num_protein,
+        num_nucleotide=num_nucleotide,
+    )
     if not isinstance(residue_info, Mapping):
-        return False
-    return _residue_labels_are_valid(
+        raise ValueError("Preprocessed artifact must contain residue_info.")
+    validate_residue_labels(
         residue_info.get("aa_type"),
         expected_count=num_protein,
         allowed_labels=PREPROCESSED_PROTEIN_RESIDUE_LABELS,
-    ) and _residue_labels_are_valid(
+    )
+    validate_residue_labels(
         residue_info.get("nuc_type"),
         expected_count=num_nucleotide,
         allowed_labels=PREPROCESSED_NUCLEOTIDE_RESIDUE_LABELS,
+    )
+    if not _coordinates_have_grid_targets(
+        (coordinates["CA"], coordinates["P"]),
+        grid.shape,
+        global_origin,
+        voxel_size,
+    ):
+        raise ValueError(
+            "Preprocessed artifact must have a backbone target in the grid."
+        )
+    return _ValidatedTrainingArtifact(
+        grid_shape=tuple(int(size) for size in grid.shape),
+        voxel_size=voxel_size,
+        protein_nodes=num_protein,
+        nucleotide_nodes=num_nucleotide,
+        component_targets=component_targets,
+        sequence_shape=sequence_shape,
     )
 
 
@@ -133,84 +183,15 @@ def _preprocessed_artifact_is_reusable(
     expected_interface_contact_cutoff: Optional[float] = None,
     require_sequence_embeddings: bool = False,
 ) -> bool:
-    if not isinstance(artifact_mapping, Mapping):
-        return False
     try:
-        from cryoflake.targets.schema import (
-            validate_component_extension_targets,
+        _validate_training_artifact_mapping(
+            artifact_mapping,
+            expected_interface_contact_cutoff=expected_interface_contact_cutoff,
+            require_sequence_embeddings=require_sequence_embeddings,
         )
-
-        extension_targets = validate_component_extension_targets(
-            artifact_mapping.get("extension_targets")
-        )
-        if expected_interface_contact_cutoff is not None and not np.isclose(
-            extension_targets["component"]["interface_contact_cutoff"],
-            float(expected_interface_contact_cutoff),
-            rtol=0.0,
-            atol=1e-8,
-        ):
-            return False
-        if require_sequence_embeddings or {"sequence", "sequence_mask"}.intersection(
-            artifact_mapping
-        ):
-            validate_sequence_embedding_payload(artifact_mapping)
-    except (ImportError, TypeError, ValueError):
+    except (ImportError, TypeError, ValueError, OverflowError):
         return False
-    if "density_grid" not in artifact_mapping:
-        return False
-    try:
-        grid = validate_density_grid(artifact_mapping["density_grid"])
-        global_origin = validate_global_origin(artifact_mapping.get("global_origin"))
-        voxel_size = validate_voxel_size(artifact_mapping.get("voxel_size"))
-    except Exception:
-        return False
-
-    backbone_coordinates = artifact_mapping.get("backbone_coordinates")
-    residue_info = artifact_mapping.get("residue_info")
-    backbone_atoms = {*BACKBONE_ATOM_NAMES, "P"}
-    has_full_backbone = False
-    if isinstance(backbone_coordinates, Mapping) and backbone_atoms.issubset(
-        backbone_coordinates
-    ):
-        atom_counts = {
-            atom_name: _coordinate_count(
-                backbone_coordinates[atom_name], allow_nan=True
-            )
-            for atom_name in backbone_atoms
-        }
-        if all(atom_count is not None for atom_count in atom_counts.values()):
-            num_protein = atom_counts["CA"]
-            num_nucleotide = atom_counts["P"]
-            try:
-                validate_full_atom_targets(
-                    artifact_mapping.get("full_atom_targets"),
-                    num_protein=num_protein,
-                    num_nucleotide=num_nucleotide,
-                )
-                has_full_atom_targets = True
-            except ValueError:
-                has_full_atom_targets = False
-            has_matching_backbone_lengths = all(
-                atom_counts[atom_name] == num_protein
-                for atom_name in BACKBONE_ATOM_NAMES
-            )
-            has_full_backbone = (
-                has_matching_backbone_lengths
-                and has_full_atom_targets
-                and _residue_info_matches_counts(
-                    residue_info,
-                    num_protein=num_protein,
-                    num_nucleotide=num_nucleotide,
-                )
-                and _coordinates_have_grid_targets(
-                    (backbone_coordinates["CA"], backbone_coordinates["P"]),
-                    grid.shape,
-                    global_origin,
-                    voxel_size,
-                    allow_nan=True,
-                )
-            )
-    return has_full_backbone
+    return True
 
 
 def _find_reusable_preprocessed_artifact(

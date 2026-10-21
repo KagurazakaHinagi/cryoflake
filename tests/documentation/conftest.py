@@ -20,7 +20,12 @@ import pytest
 from typer.testing import CliRunner
 
 from cryoflake.cli import app
-from cryoflake.constants import FULL_ATOM_COUNT, RIGID_GROUP_COUNT, TORSION_COUNT
+from cryoflake.constants import (
+    FULL_ATOM_COUNT,
+    FULL_ATOM_TARGET_SCHEMA_VERSION,
+    RIGID_GROUP_COUNT,
+    TORSION_COUNT,
+)
 from cryoflake.io.mrc import (
     load_mrc,
     normalized_grid_size,
@@ -84,10 +89,16 @@ HETATM O1 . {ligand} C 3 . C 30 ? 1 O 1.0 20.0 1.5 2.0 1.0
 def _full_atom_targets():
     """Label both nodes and explicitly mask unavailable detailed geometry."""
     targets = {
+        "schema_version": FULL_ATOM_TARGET_SCHEMA_VERSION,
         "aatype": np.asarray([0, 24], dtype=np.int64),
-        "prot_mask": np.asarray([True, False]),
         "chain_index": np.asarray([0, 1], dtype=np.int64),
         "residue_index": np.asarray([10, 20], dtype=np.int64),
+        # Synthetic adapter table for this fixture, including masked slots.
+        "atom_names": np.asarray(
+            ["N", "CA", "C", "O", "P"]
+            + [f"SLOT_{slot}" for slot in range(5, FULL_ATOM_COUNT)],
+            dtype=str,
+        ),
     }
     shapes = {
         "atom_positions": (FULL_ATOM_COUNT, 3),

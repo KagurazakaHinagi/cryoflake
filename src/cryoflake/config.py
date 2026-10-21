@@ -38,6 +38,7 @@ class ArtifactContract:
 @dataclass
 class TargetContract:
     schema_version: int = 1
+    full_atom_schema_version: int = 1
     full_atom_count: int = 65
     rigid_group_count: int = 9
     torsion_count: int = 8

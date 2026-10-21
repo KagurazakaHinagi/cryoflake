@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from cryoflake.common import sha256_file
-from cryoflake.storage import codec
+from cryoflake.storage import codec, reader
 from cryoflake.storage.store import (
     load_preprocessed_artifact,
     write_preprocessed_artifact,
@@ -145,3 +145,49 @@ def test_single_pass_reader_checks_zip_crc(tmp_path):
 
     with pytest.raises(zipfile.BadZipFile, match="CRC"):
         load_preprocessed_artifact(root)
+
+
+@pytest.mark.parametrize("root_keys", [None, ["branch"], ["label"], []])
+@pytest.mark.parametrize("include_sequence_embeddings", [True, False])
+def test_array_descriptors_are_collected_only_for_metadata_validation_and_reading(
+    tmp_path, monkeypatch, root_keys, include_sequence_embeddings
+):
+    root = tmp_path / "artifact"
+    write_preprocessed_artifact(
+        root,
+        {
+            "branch": {"values": np.arange(4), "nested": [np.arange(3), b"bytes"]},
+            "sequence": np.ones((2, 3)),
+            "label": "portable",
+        },
+    )
+    original_collect = codec._collect_array_specs
+    visits = {}
+
+    def count_descriptors(node, specs):
+        if isinstance(node, dict) and node.get("kind") in {"array", "bytes"}:
+            key = (node["store"], node["key"])
+            visits[key] = visits.get(key, 0) + 1
+        return original_collect(node, specs)
+
+    monkeypatch.setattr(codec, "_collect_array_specs", count_descriptors)
+    monkeypatch.setattr(reader, "_collect_array_specs", count_descriptors)
+    loaded = load_preprocessed_artifact(
+        root,
+        root_keys=root_keys,
+        include_sequence_embeddings=include_sequence_embeddings,
+    )
+    metadata_only = root_keys in (["label"], [])
+    if metadata_only:
+        assert loaded == ({"label": "portable"} if root_keys else {})
+    else:
+        np.testing.assert_array_equal(loaded["branch"]["values"], np.arange(4))
+        np.testing.assert_array_equal(loaded["branch"]["nested"][0], np.arange(3))
+        assert loaded["branch"]["nested"][1] == b"bytes"
+    expected_visits = 1 if metadata_only else 2
+    assert visits == {
+        ("core", "branch/values"): expected_visits,
+        ("core", "branch/nested/0"): expected_visits,
+        ("core", "branch/nested/1"): expected_visits,
+        ("sequence", "sequence"): expected_visits,
+    }

@@ -6,6 +6,7 @@ import io
 import json
 import os
 import zipfile
+from collections import namedtuple
 
 import numpy as np
 import pytest
@@ -297,3 +298,82 @@ def test_read_uses_the_same_store_snapshot_for_validation_and_decoding(
     actual = load_preprocessed_artifact(root)
 
     np.testing.assert_array_equal(actual["array"], expected)
+
+
+@pytest.mark.parametrize("root_key", ["", "root", "root/part", "root%2Fpart", "µ root"])
+def test_selected_reads_distinguish_encoded_root_components(tmp_path, root_key):
+    root = tmp_path / "artifact"
+    keys = ["", "root", "root/part", "root%2Fpart", "µ root"]
+    payload = {
+        key: {"sequence": [np.asarray([index]), b"retained bytes"]}
+        for index, key in enumerate(keys)
+    }
+    payload["sequence"] = np.ones((2, 3))
+    write_preprocessed_artifact(root, payload)
+    # Nested sequence names remain in core and do not require this store.
+    (root / "sequence.npz").unlink()
+    actual = load_preprocessed_artifact(root, root_keys=[root_key])
+    assert list(actual) == [root_key]
+    np.testing.assert_array_equal(
+        actual[root_key]["sequence"][0], [keys.index(root_key)]
+    )
+    assert actual[root_key]["sequence"][1] == b"retained bytes"
+
+
+@pytest.mark.parametrize(
+    "root_keys,expected",
+    [(["label"], {"label": "portable"}), (["absent"], {}), ([], {})],
+)
+def test_scalar_or_empty_selected_reads_need_no_array_store(
+    tmp_path, root_keys, expected
+):
+    root = tmp_path / "artifact"
+    write_preprocessed_artifact(
+        root, {"array": np.arange(4), "sequence": np.ones((2, 3)), "label": "portable"}
+    )
+    (root / "core.npz").unlink()
+    (root / "sequence.npz").unlink()
+    assert load_preprocessed_artifact(root, root_keys=root_keys) == expected
+    with pytest.raises(FileNotFoundError):
+        load_preprocessed_artifact(root)
+
+
+def test_selected_reads_still_validate_unselected_tree_nodes(tmp_path):
+    root = tmp_path / "artifact"
+    write_preprocessed_artifact(root, {"array": np.arange(4), "label": "portable"})
+    metadata_path = root / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["tree"]["items"]["array"]["dtype"] = "object"
+    metadata_path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="object or structured dtype"):
+        load_preprocessed_artifact(root, root_keys=["label"])
+
+
+def test_selected_reads_still_hash_the_complete_required_store(tmp_path):
+    root = tmp_path / "artifact"
+    write_preprocessed_artifact(root, {"array": np.arange(4), "other": np.arange(7)})
+    path = root / "core.npz"
+    with path.open("ab") as output:
+        output.write(b"tampered unselected archive bytes")
+    with pytest.raises(ValueError, match="SHA-256 does not match"):
+        load_preprocessed_artifact(root, root_keys=["array"])
+
+
+@pytest.mark.parametrize("root_key", ["record", "data"])
+def test_selected_namedtuple_arrays_and_bytes_require_only_core(tmp_path, root_key):
+    root = tmp_path / "artifact"
+    record_type = namedtuple("ArrayRecord", ["values"])
+    write_preprocessed_artifact(
+        root,
+        {
+            "record": record_type(np.arange(3)),
+            "data": b"portable bytes",
+            "sequence": np.ones((2, 3)),
+        },
+    )
+    (root / "sequence.npz").unlink()
+    loaded = load_preprocessed_artifact(root, root_keys=[root_key])
+    if root_key == "record":
+        np.testing.assert_array_equal(loaded["record"]["values"], np.arange(3))
+    else:
+        assert loaded == {"data": b"portable bytes"}

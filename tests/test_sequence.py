@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import pickle
+import zipfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -180,4 +182,175 @@ def test_sidecars_reject_inconsistent_metadata(tmp_path, metadata, message):
     path = tmp_path / "embedding.npz"
     np.savez(path, sequence=np.ones((3, 4)), **metadata)
     with pytest.raises(ValueError, match=message):
+        load_sequence_embedding_file(path)
+
+
+def test_npz_sidecar_streams_numeric_extras_without_materializing(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "embedding.npz"
+    sequence = np.arange(12, dtype=np.float64).reshape(3, 4)
+    np.savez_compressed(
+        path,
+        sequence=sequence,
+        sequence_mask=[True, False, True],
+        unified_seq="AC|||D",
+        unified_seq_len=3,
+        unrelated_array=np.arange(512 * 1024, dtype=np.float64),
+    )
+    with np.load(path, allow_pickle=False) as archive:
+        archive_type = type(archive)
+    original_getitem = archive_type.__getitem__
+    original_read = zipfile.ZipExtFile.read
+    materialized_keys = []
+    ignored_reads = []
+
+    def checked_getitem(archive, key):
+        assert key != "unrelated_array"
+        materialized_keys.append(key)
+        return original_getitem(archive, key)
+
+    def checked_read(member, size=-1):
+        if member.name == "unrelated_array.npy":
+            assert 0 <= size <= 256 * 1024
+            ignored_reads.append(size)
+        return original_read(member, size)
+
+    monkeypatch.setattr(archive_type, "__getitem__", checked_getitem)
+    monkeypatch.setattr(zipfile.ZipExtFile, "read", checked_read)
+
+    actual = load_sequence_embedding_file(path)
+
+    np.testing.assert_array_equal(actual["sequence"], sequence)
+    np.testing.assert_array_equal(actual["sequence_mask"], [True, False, True])
+    assert actual["sequence"].dtype == np.float32
+    assert materialized_keys == [
+        "sequence",
+        "sequence_mask",
+        "unified_seq",
+        "unified_seq_len",
+    ]
+    assert len(ignored_reads) > 16
+
+
+@pytest.mark.parametrize("version", [(1, 0), (2, 0), (3, 0)])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        np.array([np.nan, np.inf]),
+        np.asfortranarray(np.arange(12).reshape(3, 4)),
+        np.zeros(2, dtype=[("value", "f8"), ("index", "i4")]),
+        np.zeros((0, 3)),
+        np.ndarray((2, 3), dtype="S0"),
+    ],
+    ids=["nonfinite", "fortran", "structured", "empty", "zero-width"],
+)
+def test_npz_sidecars_preserve_supported_ignored_array_formats(
+    tmp_path, version, extra
+):
+    path = tmp_path / "embedding.npz"
+    np.savez(path, sequence=np.ones((2, 3)))
+    serialized = io.BytesIO()
+    np.lib.format.write_array(serialized, extra, version=version, allow_pickle=False)
+    with zipfile.ZipFile(path, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("extra.npy", serialized.getvalue())
+
+    actual = load_sequence_embedding_file(path)
+
+    np.testing.assert_array_equal(actual["sequence"], np.ones((2, 3)))
+    np.testing.assert_array_equal(actual["sequence_mask"], [True, True])
+
+
+@pytest.mark.parametrize("object_field", [False, True])
+def test_npz_sidecars_validate_utf8_structured_extras_without_unpickling(
+    tmp_path, monkeypatch, object_field
+):
+    path = tmp_path / "embedding.npz"
+    np.savez(path, sequence=np.ones((2, 3)))
+    extra = np.zeros(1, dtype=[("原子", object if object_field else "f8")])
+    serialized = io.BytesIO()
+    np.lib.format.write_array(serialized, extra, version=(3, 0))
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.writestr("extra.npy", serialized.getvalue())
+
+    def unexpected_unpickle(*args, **kwargs):
+        pytest.fail("Ignored object arrays must be rejected before unpickling")
+
+    monkeypatch.setattr(pickle, "load", unexpected_unpickle)
+    monkeypatch.setattr(pickle, "loads", unexpected_unpickle)
+    if object_field:
+        with pytest.raises(ValueError, match="Object arrays cannot be loaded"):
+            load_sequence_embedding_file(path)
+    else:
+        np.testing.assert_array_equal(
+            load_sequence_embedding_file(path)["sequence"], np.ones((2, 3))
+        )
+
+
+@pytest.mark.parametrize("member_name", ["notes.txt", "notes.npy"])
+def test_npz_sidecars_preserve_raw_non_npy_extras(tmp_path, member_name):
+    path = tmp_path / "embedding.npz"
+    np.savez(path, sequence=np.ones((2, 3)))
+    with zipfile.ZipFile(path, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(member_name, b"extra information" * 100_000)
+
+    actual = load_sequence_embedding_file(path)
+
+    np.testing.assert_array_equal(actual["sequence"], np.ones((2, 3)))
+
+
+@pytest.mark.parametrize("invalid_kind", ["header", "version", "shape", "truncated"])
+def test_npz_sidecars_reject_malformed_ignored_arrays(tmp_path, invalid_kind):
+    path = tmp_path / "embedding.npz"
+    np.savez(path, sequence=np.ones((2, 3)))
+    serialized = io.BytesIO()
+    if invalid_kind == "shape":
+        np.lib.format.write_array_header_1_0(
+            serialized,
+            {"descr": "<f4", "shape": (-1,), "fortran_order": False},
+        )
+        content = serialized.getvalue()
+    else:
+        np.lib.format.write_array(serialized, np.arange(1024), allow_pickle=False)
+        content = serialized.getvalue()
+        if invalid_kind == "header":
+            content = content[:10] + b"invalid header"
+        elif invalid_kind == "version":
+            content = content[:6] + b"\x04\x00" + content[8:]
+        else:
+            content = content[:-1]
+    with zipfile.ZipFile(path, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("extra.npy", content)
+
+    with pytest.raises(ValueError):
+        load_sequence_embedding_file(path)
+
+
+@pytest.mark.parametrize("member_name", ["extra.npy", "notes.txt"])
+def test_npz_sidecars_reject_ignored_member_crc_corruption(tmp_path, member_name):
+    path = tmp_path / "embedding.npz"
+    np.savez(path, sequence=np.ones((2, 3)))
+    extra = io.BytesIO()
+    np.lib.format.write_array(extra, np.arange(128 * 1024), allow_pickle=False)
+    with zipfile.ZipFile(path, "a", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr(
+            member_name,
+            extra.getvalue()
+            if member_name.endswith(".npy")
+            else b"raw bytes" * 100_000,
+        )
+    with zipfile.ZipFile(path) as archive:
+        member = archive.getinfo(member_name)
+    content = bytearray(path.read_bytes())
+    filename_size = int.from_bytes(
+        content[member.header_offset + 26 : member.header_offset + 28], "little"
+    )
+    extra_size = int.from_bytes(
+        content[member.header_offset + 28 : member.header_offset + 30], "little"
+    )
+    payload_offset = member.header_offset + 30 + filename_size + extra_size
+    content[payload_offset + member.file_size - 1] ^= 1
+    path.write_bytes(content)
+
+    with pytest.raises(zipfile.BadZipFile, match="CRC"):
         load_sequence_embedding_file(path)

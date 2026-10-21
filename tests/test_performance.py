@@ -7,6 +7,82 @@ import numpy as np
 import pytest
 
 from cryoflake import common
+from cryoflake.preprocess.reuse import _coordinates_have_grid_targets
+
+
+@pytest.mark.parametrize("target_in_last_row", [False, True])
+def test_grid_target_check_uses_bounded_workspace_and_checks_last_chunk(
+    target_in_last_row,
+):
+    coordinates = np.full((1_000_000, 3), 10.0, dtype=np.float32)
+    coordinates[0] = np.nan
+    coordinates[1] = np.finfo(np.float32).max
+    if target_in_last_row:
+        coordinates[-1] = [1, 1, 1]
+    tracemalloc.start()
+    try:
+        found = _coordinates_have_grid_targets(
+            (coordinates,), (4, 4, 4), np.zeros(3, dtype=np.float32), 1.0
+        )
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert found is target_in_last_row
+    # The old filtered coordinate copy alone needed nearly 12 MB. Chunking
+    # bounds all temporary coordinate and boolean arrays independently of N.
+    assert peak_bytes < 4 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    "coordinate, expected",
+    [
+        ([0, 0, 0], True),
+        ([3.999, 2.999, 1.999], True),
+        ([4, 0, 0], False),
+        ([0, 3, 0], False),
+        ([0, 0, 2], False),
+        ([-0.001, 0, 0], False),
+    ],
+)
+def test_grid_target_check_preserves_xyz_bounds_for_zyx_grid(coordinate, expected):
+    assert (
+        _coordinates_have_grid_targets(
+            (np.asarray([coordinate], dtype=np.float32),),
+            (2, 3, 4),
+            np.zeros(3, dtype=np.float32),
+            1.0,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "coordinate, origin, voxel_size, expected",
+    [
+        ([0, 0, 0], [0, 0, 0], 1e-100, True),
+        ([0, 0, 0], [0, 0, 0], np.nextafter(0.0, 1.0), True),
+        ([-1, 0, 0], [0, 0, 0], 1e100, False),
+        ([-1e-40, 0, 0], [0, 0, 0], 1e30, False),
+        ([1, 0, 0], [0, 0, 0], 1e-100, False),
+        ([1e38, 0, 0], [-1e38, 0, 0], 1e38, True),
+        ([3e38, 0, 0], [-3e38, 0, 0], 1e39, True),
+        ([1, 0, 0], [0, 0, 0], 1e308, True),
+    ],
+)
+def test_grid_target_check_preserves_finite_spacing_range(
+    coordinate, origin, voxel_size, expected
+):
+    with np.errstate(all="raise"):
+        assert (
+            _coordinates_have_grid_targets(
+                (np.asarray([coordinate], dtype=np.float32),),
+                (4, 4, 4),
+                np.asarray(origin, dtype=np.float32),
+                voxel_size,
+            )
+            is expected
+        )
 
 
 @pytest.mark.parametrize("order", ["contiguous", "fortran", "strided"])

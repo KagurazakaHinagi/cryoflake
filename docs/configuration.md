@@ -115,10 +115,12 @@ checkout does. Installed packages also accept absolute configuration paths.
 
 ## Pipeline reference
 
-All settings below live under `pipeline`. CLI names normally replace
-underscores with hyphens. Exceptions: `source_csv` uses `--source-csv`, and
-`artifact_reuse_dirs` uses repeatable `--artifact-reuse-dir`. Any setting
-can be supplied through `-o pipeline.KEY=VALUE`.
+All settings below live under `pipeline`. CLI option names normally replace
+underscores with hyphens. `artifact_reuse_dirs` uses repeatable
+`--artifact-reuse-dir`; `include_without_structure` uses the pair
+`--include-without-structure` / `--exclude-without-structure`. Single-artifact
+commands take their raw inputs and artifact reference as positional arguments,
+as listed below. Any setting can be supplied through `-o pipeline.KEY=VALUE`.
 
 ### Manifest and downloads
 
@@ -242,6 +244,10 @@ their identities, versions, filenames, marker, metadata limit, or target
 dimensions are rejected. Supporting another wire format requires code changes.
 Use the [artifact](artifact-format.md) and [data](data-contracts.md) references
 to interpret these descriptors.
+The packaged `contracts/targets: component` group retains component
+`schema_version: 1` and separately declares `full_atom_schema_version: 1`.
+Both versions describe fixed supported schemas; overriding either version is
+rejected.
 
 Source/output CSVs, summaries, lists, reports, holdout inputs, and checkpoint
 sidecars must use distinct files, including symlink and existing hardlink

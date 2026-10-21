@@ -62,6 +62,8 @@ EXPECTED_EXAMPLES = {
     "artifact-roundtrip": "python",
     "contract-source-csv": "data",
     "contract-geometry": "python",
+    "contract-full-atom-roundtrip": "python",
+    "contract-component-derived": "python",
     "development-checks": "setup",
 }
 

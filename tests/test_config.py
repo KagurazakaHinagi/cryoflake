@@ -31,6 +31,7 @@ def test_packaged_contracts_and_groups_preserve_dataset_wire_format():
     )
     assert artifact.generation_key == "__cryoflake_store_generation__"
     assert targets.schema_version == 1
+    assert targets.full_atom_schema_version == 1
     assert (
         targets.full_atom_count,
         targets.rigid_group_count,
@@ -40,6 +41,7 @@ def test_packaged_contracts_and_groups_preserve_dataset_wire_format():
         config = compose_config(pipeline=group)
         assert config.pipeline.name == group
         assert config.pipeline.sequence_embedding_suffix == ".npz"
+        assert config.contracts.targets.full_atom_schema_version == 1
         assert OmegaConf.is_struct(config)
 
 
@@ -115,6 +117,10 @@ def test_hydra_overrides_and_interpolation_do_not_change_cwd(tmp_path, monkeypat
         "pipeline.sequence_embedding_suffix=.json",
         "pipeline.sequence_embedding_suffix=''",
         "contracts.targets.schema_version=2",
+        "contracts.targets.full_atom_schema_version=0",
+        "contracts.targets.full_atom_schema_version=2",
+        "contracts.targets.full_atom_schema_version=true",
+        "contracts.targets.full_atom_schema_version=1.5",
         "contracts.targets.full_atom_count=99",
         "+pipeline.unrecognized=true",
         "pipeline.artifact_reference=hf://buckets/user/artifact",

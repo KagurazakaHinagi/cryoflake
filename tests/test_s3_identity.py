@@ -116,17 +116,20 @@ def test_checkpoint_identity_uses_dotenv_destination_and_excludes_credentials(
     assert json_sha256(_contract(tmp_path)) == json_sha256(first)
 
 
-def test_yaml_target_contract_change_invalidates_checkpoint(monkeypatch, tmp_path):
+@pytest.mark.parametrize("field", ["schema_version", "full_atom_schema_version"])
+def test_yaml_target_contract_change_invalidates_checkpoint(
+    monkeypatch, tmp_path, field
+):
     first = _contract(tmp_path)
     original = artifact_identity.target_contract()
     monkeypatch.setattr(
         artifact_identity,
         "target_contract",
-        lambda: replace(original, schema_version=original.schema_version + 1),
+        lambda: replace(original, **{field: getattr(original, field) + 1}),
     )
     second = _contract(tmp_path)
     assert (
-        first["format_contracts"]["targets"]["schema_version"]
-        != second["format_contracts"]["targets"]["schema_version"]
+        first["format_contracts"]["targets"][field]
+        != second["format_contracts"]["targets"][field]
     )
     assert json_sha256(first) != json_sha256(second)

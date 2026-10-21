@@ -17,9 +17,15 @@ from dotenv import dotenv_values
 from omegaconf import OmegaConf
 
 from cryoflake.manifests.manifest import read_artifact_list, read_manifest_csv
+from cryoflake.preprocess import manifest as preprocessing_manifest
+from cryoflake.preprocess.checkpoint import (
+    CheckpointContractMismatchError,
+    PreprocessCheckpoint,
+)
 from cryoflake.storage.artifacts import validate_preprocessed_artifact
 from cryoflake.storage.store import load_preprocessed_artifact
 
+from . import conftest as documentation_fixtures
 from .examples import get_example
 
 pytestmark = pytest.mark.documentation
@@ -131,6 +137,72 @@ def test_download_example_fetches_real_gzip_inputs(doc_workspace):
     assert all(row["map_path"].endswith(".map") for row in rows)
 
 
+@pytest.mark.parametrize(
+    "flag, expected_ids",
+    [
+        ("--include-without-structure", ["1234", "5678", "9999"]),
+        ("--exclude-without-structure", ["1234", "5678"]),
+    ],
+)
+def test_documented_association_flags_include_or_exclude_unassociated_rows(
+    doc_workspace, flag, expected_ids
+):
+    source_csv = doc_workspace.root / "data/source.csv"
+    source_csv.write_text(source_csv.read_text() + "EMD-9999,,4.2\n")
+    (command,) = get_example("readme-manifest").commands()
+
+    doc_workspace.invoke([*command, flag])
+
+    rows = read_manifest_csv(doc_workspace.root / "data/manifest.csv")
+    assert [row["emdb_id"] for row in rows] == expected_ids
+    if flag == "--include-without-structure":
+        assert rows[-1]["wwpdb_id"] == rows[-1]["structure_path"] == ""
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "polymer_atom_positions",
+        "polymer_chain_indices",
+        "polymer_residue_indices",
+        "polymer_aatype",
+    ],
+)
+def test_adapter_example_rejects_context_conversion_overflow(
+    doc_workspace, monkeypatch, field
+):
+    builder = documentation_fixtures.build_component_extension_targets
+
+    def with_overflow(*arguments, **keywords):
+        if field == "polymer_atom_positions":
+            values = np.asarray(keywords[field], dtype=np.float64)
+            values[0, 0] = 1e100
+        else:
+            values = np.asarray(keywords[field], dtype=np.uint64)
+            values[0] = np.iinfo(np.uint64).max
+        keywords[field] = values
+        return builder(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        documentation_fixtures, "build_component_extension_targets", with_overflow
+    )
+    command = next(
+        command
+        for command in get_example("guide-single").commands()
+        if command[0] == "preprocess"
+    )
+    metadata_path = doc_workspace.root / "data/artifacts/example/metadata.json"
+    original_metadata = metadata_path.read_bytes()
+
+    result = doc_workspace.invoke(command, check=False)
+
+    assert result.exit_code == 1
+    expected_dtype = "float32" if field == "polymer_atom_positions" else "int64"
+    assert expected_dtype in result.output
+    assert len(doc_workspace.adapter_calls) == 1
+    assert metadata_path.read_bytes() == original_metadata
+
+
 def test_single_example_runs_adapter_and_validates_actual_artifact(doc_workspace):
     artifact = doc_workspace.root / "data/artifacts/example"
     shutil.rmtree(artifact)
@@ -212,7 +284,20 @@ def test_single_artifact_guide_rejects_invalid_raw_file_paths_before_adapter_io(
     assert metadata_path.read_bytes() == original_metadata
 
 
-def test_cli_batch_example_produces_two_successful_training_artifacts(doc_workspace):
+def test_cli_batch_example_produces_two_successful_training_artifacts(
+    doc_workspace, monkeypatch
+):
+    contracts = []
+    build_contract = preprocessing_manifest.preprocess_checkpoint_contract
+
+    def capture_contract(**arguments):
+        contract = build_contract(**arguments)
+        contracts.append(contract)
+        return contract
+
+    monkeypatch.setattr(
+        preprocessing_manifest, "preprocess_checkpoint_contract", capture_contract
+    )
     doc_workspace.invoke(_batch_command())
     paths = _assert_complete_batch(doc_workspace)
     assert {Path(path).name for path in paths} == {
@@ -223,6 +308,26 @@ def test_cli_batch_example_produces_two_successful_training_artifacts(doc_worksp
     assert len(doc_workspace.http_calls) == 4
     assert not (doc_workspace.root / "data/summary.csv.checkpoint.json").exists()
     assert not (doc_workspace.root / "data/summary.csv.checkpoint.jsonl").exists()
+    (contract,) = contracts
+    artifact_mapping = load_preprocessed_artifact(paths[0])
+    component = artifact_mapping["extension_targets"]["component"]
+    assert contract["target_fields"] == {
+        "full_atom_targets": sorted(artifact_mapping["full_atom_targets"]),
+        "extension_targets.component": sorted(component),
+        "extension_targets.component.proposal_targets": sorted(
+            component["proposal_targets"]
+        ),
+    }
+    old_contract = json.loads(json.dumps(contract))
+    old_contract["target_fields"]["full_atom_targets"].append("prot_mask")
+    checkpoint_summary = doc_workspace.root / "data/layout-identity.csv"
+    with PreprocessCheckpoint(checkpoint_summary, old_contract):
+        pass
+    with pytest.raises(
+        CheckpointContractMismatchError, match="reset-preprocess-checkpoint"
+    ):
+        with PreprocessCheckpoint(checkpoint_summary, contract):
+            pass
 
 
 def test_python_batch_example_uses_manifest_relative_input_paths(doc_workspace):
@@ -433,6 +538,10 @@ def test_configuration_inspection_examples_resolve_groups_and_interpolation(
     assert configs[-1].pipeline.workers == 4
     assert configs[-1].pipeline.preprocess_workers == 4
     assert all(config.contracts.artifact.format_version == 1 for config in configs)
+    assert all(config.contracts.targets.schema_version == 1 for config in configs)
+    assert all(
+        config.contracts.targets.full_atom_schema_version == 1 for config in configs
+    )
 
 
 def test_project_configuration_examples_compose_and_execute(doc_workspace):
@@ -443,6 +552,18 @@ def test_project_configuration_examples_compose_and_execute(doc_workspace):
     for command in commands[1:]:
         doc_workspace.invoke(command)
     assert len(read_manifest_csv(doc_workspace.root / "data/manifest.csv")) == 2
+
+
+@pytest.mark.parametrize("field", ["schema_version", "full_atom_schema_version"])
+def test_documented_target_schema_versions_cannot_be_overridden(doc_workspace, field):
+    command = get_example("config-inspect").commands()[0]
+
+    result = doc_workspace.invoke(
+        [*command, "-o", f"contracts.targets.{field}=2"], check=False
+    )
+
+    assert result.exit_code == 2
+    assert field in result.output
 
 
 def test_custom_yaml_group_example_composes_with_packaged_defaults(doc_workspace):

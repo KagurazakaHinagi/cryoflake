@@ -73,6 +73,7 @@ with TemporaryDirectory() as temporary:
         root,
         {
             "sequence": np.zeros((3, 16), dtype=np.float32),
+            "sequence_mask": None,
         },
     )
     loaded = load_preprocessed_artifact(root)
@@ -243,16 +244,20 @@ with TemporaryDirectory() as temporary:
 | Module/API | Use |
 | --- | --- |
 | `cryoflake.build_component_extension_targets(structure_path, *, global_origin, voxel_size, grid_shape, ...)` | Build component targets from mmCIF, with optional polymer context and interface cutoff. |
-| `cryoflake.validate_component_extension_targets(extension_targets)` | Validate and normalize schema, masks, indices, and component metadata. |
-| `cryoflake.targets.full_atom.extract_full_atom_targets(target_source)` | Extract aligned target attributes from an application object and reorder protein rows before nucleotide rows. The object must already supply the full target arrays and topology; this is not a structure parser or model. |
-| `cryoflake.validate_full_atom_targets(targets, num_protein=None, num_nucleotide=None)` | Validate full-atom targets and optional backbone row counts. |
+| `cryoflake.validate_component_extension_targets(extension_targets)` | Validate and normalize the lean component schema, indices, stored proposal validity, and metadata. Derive atom/interface presence, proposal positions, and group lists from the normalized fields as shown in the data contracts. |
+| `cryoflake.targets.full_atom.extract_full_atom_targets(target_source)` | Extract target arrays, topology, and the shared `(65,)` `atom_names` table from an application object. Reorder protein rows before nucleotide rows while preserving the table's slot order; emit the current full-atom schema version. |
+| `cryoflake.validate_full_atom_targets(targets, num_protein=None, num_nucleotide=None)` | Validate full-atom schema version, the shared complete 65-name table, masks, topology, and optional backbone row counts; derive protein membership from `aatype`. Normalize names to Unicode and numeric arrays to their contract dtypes. All names must be nonempty and globally unique, including masked slots. |
 | `cryoflake.validate_preprocessed_artifact_mapping(artifact_mapping, source=None)` | Check that the input implements `Mapping` and return the same object. This checks the input type only. |
 | `cryoflake.get_preprocessed_artifact_grid(artifact_mapping, source=None)`, `get_preprocessed_artifact_voxel_size(artifact_mapping, source=None)`, `get_preprocessed_artifact_global_origin(artifact_mapping, source=None)` | Read and normalize individual geometry fields. These do not validate the complete training artifact. |
 | `cryoflake.metadata` | Independent validators for grids, coordinate arrays, origin, voxel size, residue labels, and mapping inputs. |
-| `cryoflake.constants` | Enums, molecular vocabularies, required field tuples, and target dimensions. |
+| `cryoflake.constants` | Enums, molecular vocabularies, required field tuples, target dimensions, and `FULL_ATOM_TARGET_SCHEMA_VERSION` (also exported by `cryoflake`). |
 
 The [data contracts](data-contracts.md) define shapes, enum values, coordinate
 frames, valid masks, and the model-specific conventions the adapter must supply.
+The [named-atom roundtrip](data-contracts.md#full-atom-supervision) example reads
+stored names and masks to recover atom coordinates without a separate name table.
+The [component reader example](data-contracts.md#component-extension-schema-version-1)
+derives local masks, proposal coordinates, and split-group lists from stored fields.
 `validate_preprocessed_artifact_mapping()` does not check required keys, array
 values, or storage integrity, and it raises `ValueError` for a non-mapping input.
 Use `validate_preprocessed_artifact(artifact_reference)` for the complete stored training
