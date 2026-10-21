@@ -9,6 +9,8 @@ import subprocess
 import sys
 import sysconfig
 import tarfile
+import zipfile
+from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
@@ -36,6 +38,23 @@ def _wheel_install_arguments(uv: str, command: list[str], wheel: Path) -> list[s
         "--offline",
         "--no-deps",
         *(str(wheel) if token == placeholders[0] else token for token in command[3:]),
+    ]
+
+
+def _visualization_install_arguments(
+    uv: str, command: list[str], wheel: Path
+) -> list[str]:
+    assert command[:3] == ["uv", "pip", "install"]
+    assert command[3:].count("cryoflake[vis]") == 1
+    return [
+        uv,
+        *command[1:3],
+        "--offline",
+        "--no-deps",
+        *(
+            str(wheel) + "[vis]" if token == "cryoflake[vis]" else token
+            for token in command[3:]
+        ),
     ]
 
 
@@ -68,8 +87,9 @@ def built_distributions(tmp_path_factory):
     return uv, wheel, source
 
 
+@pytest.mark.parametrize("example_id", ["guide-wheel-install", "visualization-install"])
 def test_documented_wheel_installation_works_outside_checkout(
-    tmp_path, built_distributions
+    tmp_path, built_distributions, example_id
 ):
     uv, wheel, _ = built_distributions
     working = tmp_path / "application"
@@ -95,14 +115,24 @@ def test_documented_wheel_installation_works_outside_checkout(
         # .pth file. The installed cryoflake must come from the new wheel.
         PYTHONPATH=sysconfig.get_path("purelib"),
     )
-    install, help_command = get_example("guide-wheel-install").shell_commands()
+    install, help_command = get_example(example_id).shell_commands()
+    install_arguments = (
+        _visualization_install_arguments(uv, install, wheel)
+        if example_id == "visualization-install"
+        else _wheel_install_arguments(uv, install, wheel)
+    )
     _run(
-        _wheel_install_arguments(uv, install, wheel),
+        install_arguments,
         cwd=working,
         env=child_env,
     )
     help_result = _run(help_command, cwd=working, env=child_env)
-    assert "prepare-manifest" in help_result.stdout
+    if example_id == "visualization-install":
+        assert "artifact_reference" in help_result.stdout
+        assert "molstar" in help_result.stdout
+        assert "chimerax" in help_result.stdout
+    else:
+        assert "prepare-manifest" in help_result.stdout
 
     python = environment / "bin/python"
     probe = _run(
@@ -123,6 +153,65 @@ def test_documented_wheel_installation_works_outside_checkout(
     loaded = json.loads(probe.stdout)
     assert Path(loaded["file"]).is_relative_to(environment)
     assert loaded["pipelines"] == ["manifest", "preprocess", "validate"]
+
+    # Even a shared dependency directory must not hide the base-install path.
+    # Block the optional server import, then exercise the installed CLI before
+    # any artifact can be read. Core commands and help remain available.
+    missing_extra_probe = _run(
+        [
+            str(python),
+            "-c",
+            "\n".join(
+                [
+                    "import importlib.abc, json, sys",
+                    "class WithoutBottle(importlib.abc.MetaPathFinder):",
+                    "    def find_spec(self, fullname, path=None, target=None):",
+                    "        if fullname == 'bottle':",
+                    "            raise ModuleNotFoundError(name='bottle')",
+                    "sys.meta_path.insert(0, WithoutBottle())",
+                    "from typer.testing import CliRunner",
+                    "from cryoflake.cli import app",
+                    "runner = CliRunner()",
+                    "help_result = runner.invoke(app, ['--help'])",
+                    "result = runner.invoke(app, ['visualize', 'missing-artifact'])",
+                    "print(json.dumps({'help_exit': help_result.exit_code, "
+                    "'exit': result.exit_code, 'output': result.output}))",
+                ]
+            ),
+        ],
+        cwd=working,
+        env=child_env,
+    )
+    missing_extra = json.loads(missing_extra_probe.stdout)
+    assert missing_extra["help_exit"] == 0
+    assert missing_extra["exit"] == 1
+    assert "uv pip install 'cryoflake[vis]'" in missing_extra["output"]
+    assert "missing-artifact" not in missing_extra["output"]
+
+
+def test_visualization_extra_and_viewer_assets_are_packaged(built_distributions):
+    _, wheel, _ = built_distributions
+    with zipfile.ZipFile(wheel) as archive:
+        metadata_path = next(
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        metadata = BytesParser().parsebytes(archive.read(metadata_path))
+        assert "vis" in metadata.get_all("Provides-Extra", [])
+        optional_dependencies = metadata.get_all("Requires-Dist", [])
+        server_dependencies = [
+            requirement
+            for requirement in optional_dependencies
+            if requirement.startswith("bottle")
+        ]
+        assert len(server_dependencies) == 1
+        assert 'extra == "vis"' in server_dependencies[0].replace("'", '"')
+        assert ">=0.13" in server_dependencies[0]
+        assert "<0.14" in server_dependencies[0]
+        for source in sorted((PROJECT_ROOT / "src/cryoflake/visualization").rglob("*")):
+            if not source.is_file() or "__pycache__" in source.parts:
+                continue
+            package_path = str(source.relative_to(PROJECT_ROOT / "src"))
+            assert archive.read(package_path) == source.read_bytes()
 
 
 def test_source_distribution_keeps_documentation_tests_and_public_guides(

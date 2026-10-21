@@ -10,7 +10,9 @@ coverage.
 ## Set up the checkout
 
 Use Python 3.12 or newer and uv. The lockfile records runtime and development
-dependencies; the `dev` group contains pytest, pytest-cov, and Ruff.
+dependencies; the `dev` group contains pytest, pytest-cov, Ruff, and the
+visualization server dependency so the full suite also runs after the standard
+development setup below.
 
 <!-- doc-example: development-checks; mode=setup -->
 ```bash

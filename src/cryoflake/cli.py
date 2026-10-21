@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Callable, Sequence
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -124,6 +125,62 @@ def _adapter(
 def _runtime_failure(exc: Exception) -> None:
     typer.echo(f"Error: {exc}", err=True)
     raise typer.Exit(1) from exc
+
+
+class VisualizationViewer(str, Enum):
+    molstar = "molstar"
+    chimerax = "chimerax"
+
+
+@app.command("visualize")
+def visualize(
+    artifact_reference: Annotated[
+        str,
+        typer.Argument(help="Local or S3 artifact root or metadata.json reference."),
+    ],
+    viewer: Annotated[
+        VisualizationViewer, typer.Option(help="Molecular visualization viewer.")
+    ] = VisualizationViewer.molstar,
+    visualization_output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Retain reconstructed assets here; otherwise use temporary data."
+        ),
+    ] = None,
+    atom_names_path: Annotated[
+        Path | None,
+        typer.Option(help="JSON atom-slot names for full-atom polymer reconstruction."),
+    ] = None,
+    port: Annotated[
+        int, typer.Option(min=0, max=65535, help="MolStar port; 0 selects a free port.")
+    ] = 0,
+    open_browser: Annotated[
+        bool,
+        typer.Option(
+            "--open-browser/--no-open-browser", help="Open MolStar in a browser."
+        ),
+    ] = True,
+    chimerax_path: Annotated[
+        Path | None, typer.Option(help="Installed standalone ChimeraX executable.")
+    ] = None,
+    s3_endpoint_url: str | None = None,
+) -> None:
+    """View an artifact's structure, sequence, and density (requires the vis extra)."""
+    from cryoflake.visualization import visualize_artifact
+
+    try:
+        visualize_artifact(
+            artifact_reference,
+            viewer=viewer.value,
+            visualization_output_dir=visualization_output_dir,
+            atom_names_path=atom_names_path,
+            port=port,
+            open_browser=open_browser,
+            chimerax_path=chimerax_path,
+            s3_endpoint_url=s3_endpoint_url,
+        )
+    except Exception as exc:
+        _runtime_failure(exc)
 
 
 @app.command("config")

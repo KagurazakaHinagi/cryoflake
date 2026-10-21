@@ -15,6 +15,7 @@ application through explicit adapters.
 | Configure paths, pipelines, splitting, and environment settings | [Configuration reference](configuration.md) |
 | Produce or consume training arrays | [Data contracts](data-contracts.md) |
 | Implement an NPZ+JSON reader or inspect artifact integrity | [Artifact format specification](artifact-format.md) |
+| Inspect an artifact's structure, sequence, and density in MolStar or ChimeraX | [Visualization](visualization.md) |
 | Use the package from Python | [API reference](api-reference.md) |
 | Contribute changes and run checks | [Development](development.md) |
 

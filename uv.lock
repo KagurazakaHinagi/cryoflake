@@ -98,6 +98,15 @@ wheels = [
 ]
 
 [[package]]
+name = "bottle"
+version = "0.13.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7a/71/cca6167c06d00c81375fd668719df245864076d284f7cb46a694cbeb5454/bottle-0.13.4.tar.gz", hash = "sha256:787e78327e12b227938de02248333d788cfe45987edca735f8f88e03472c3f47", size = 98717, upload-time = "2025-06-15T10:08:59.439Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/f6/b55ec74cfe68c6584163faa311503c20b0da4c09883a41e8e00d6726c954/bottle-0.13.4-py2.py3-none-any.whl", hash = "sha256:045684fbd2764eac9cdeb824861d1551d113e8b683d8d26e296898d3dd99a12e", size = 103807, upload-time = "2025-06-15T10:08:57.691Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.10.19"
 source = { registry = "https://pypi.org/simple" }
@@ -361,8 +370,14 @@ dependencies = [
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+vis = [
+    { name = "bottle" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "bottle" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -372,6 +387,7 @@ dev = [
 requires-dist = [
     { name = "biotite", specifier = ">=1.6,<2" },
     { name = "boto3", specifier = ">=1.34,<2" },
+    { name = "bottle", marker = "extra == 'vis'", specifier = ">=0.13,<0.14" },
     { name = "hydra-core", specifier = ">=1.3.2,<2" },
     { name = "mrcfile", specifier = ">=1.5,<2" },
     { name = "numpy", specifier = ">=1.26,<3" },
@@ -380,9 +396,11 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66,<5" },
     { name = "typer", specifier = ">=0.16,<1" },
 ]
+provides-extras = ["vis"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "bottle", specifier = ">=0.13,<0.14" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pytest-cov", specifier = ">=6,<8" },
     { name = "ruff", specifier = ">=0.14,<1" },

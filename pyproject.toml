@@ -21,11 +21,15 @@ dependencies = [
     "typer>=0.16,<1",
 ]
 
+[project.optional-dependencies]
+vis = ["bottle>=0.13,<0.14"]
+
 [project.scripts]
 cryoflake = "cryoflake.cli:main"
 
 [dependency-groups]
 dev = [
+    "bottle>=0.13,<0.14",
     "pytest>=8,<10",
     "pytest-cov>=6,<8",
     "ruff>=0.14,<1",

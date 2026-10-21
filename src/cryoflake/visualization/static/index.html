@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>cryoFlake · Artifact viewer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/molstar@5.13.0/build/viewer/molstar.css" integrity="sha384-D+V6b5rE0GHUfqRo0agsDJDSHDL0nCHDP4pdeWPVF/BoNpV+CGVWfNxyxyd/lDxN" crossorigin="anonymous">
+    <link rel="stylesheet" href="/app.css">
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="cryoFlake artifact viewer">❄ <span>cryoFlake</span></a>
+      <span class="page-name">Artifact viewer</span>
+      <span class="local-badge">● Local session</span>
+    </header>
+    <main>
+      <aside class="sidebar" aria-label="Visualization controls">
+        <section>
+          <p class="eyebrow">RECONSTRUCTED ARTIFACT</p>
+          <h1 id="artifact-title">Molecular view</h1>
+          <p id="artifact-reference" class="artifact-reference">Loading artifact information…</p>
+          <dl id="artifact-stats" class="stats"></dl>
+          <p id="geometry" class="muted"></p>
+        </section>
+        <section>
+          <h2>Display</h2>
+          <fieldset id="display-controls" disabled>
+            <label class="toggle"><span>Atomic structure</span><input id="show-structure" type="checkbox" checked></label>
+            <label class="toggle"><span>Density overlay</span><input id="show-density" type="checkbox" checked></label>
+            <label class="slider-label" for="density-level">Density level <output id="density-level-value">1.0 σ</output></label>
+            <input id="density-level" type="range" min="-3" max="8" step="0.1" value="1" aria-describedby="level-help">
+            <p id="level-help" class="muted">Contour = mean + level × standard deviation.</p>
+            <label class="slider-label" for="density-opacity">Density opacity <output id="density-opacity-value">25%</output></label>
+            <input id="density-opacity" type="range" min="0" max="1" step="0.05" value="0.25">
+            <button id="reset-camera" type="button">Reset camera <span aria-hidden="true">↗</span></button>
+          </fieldset>
+        </section>
+        <section>
+          <h2>Sequence <span id="sequence-count" class="count"></span></h2>
+          <p class="muted">Use the sequence bar above the 3D view to locate residues.</p>
+          <div id="sequences" class="sequences">Loading sequences…</div>
+        </section>
+        <section id="limitations-section" hidden>
+          <h2>Reconstruction notes</h2>
+          <ul id="limitations" class="notes"></ul>
+        </section>
+        <section>
+          <h2>Downloads</h2>
+          <div class="downloads">
+            <a href="/structure.cif" download>Structure <span>mmCIF ↓</span></a>
+            <a href="/density.mrc" download>Density <span>MRC ↓</span></a>
+            <a href="/sequence.fasta" download>Sequence <span>FASTA ↓</span></a>
+            <a href="/summary.json" download>Summary <span>JSON ↓</span></a>
+          </div>
+        </section>
+        <p class="privacy">Artifact data stays on this computer. The Mol* engine loads from jsDelivr and requires internet access.</p>
+      </aside>
+      <div class="viewer-column">
+        <div class="viewer-toolbar"><span><span class="legend-atom">●</span> Structure <span class="legend-density">●</span> Density</span><span>Rotate · drag &nbsp; Zoom · scroll</span></div>
+        <div class="viewer-container">
+          <div id="viewer" aria-label="Interactive molecular structure and density"></div>
+          <div id="loading" class="loading" role="status"><span class="spinner" aria-hidden="true"></span><span id="loading-message">Starting molecular viewer…</span></div>
+          <div id="error" class="error" role="alert" hidden><h2>Could not load the visualization</h2><p id="error-message"></p><p>Downloads remain available in the sidebar. Keep the cryoFlake command running, then reload this page to retry.</p><button id="reload" type="button">Reload viewer</button></div>
+        </div>
+        <footer><span id="session-status" role="status">Preparing structure and density…</span><span>Mol* 5.13.0</span></footer>
+      </div>
+    </main>
+  </body>
+</html>

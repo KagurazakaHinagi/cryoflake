@@ -63,6 +63,14 @@ EXPECTED_EXAMPLES = {
     "contract-source-csv": "data",
     "contract-geometry": "python",
     "development-checks": "setup",
+    "visualization-install": "setup",
+    "visualization-checkout": "setup",
+    "visualization-molstar": "cli",
+    "visualization-manual-browser": "cli",
+    "visualization-s3": "cli",
+    "visualization-chimerax": "cli",
+    "visualization-atom-names": "python",
+    "visualization-full-atom": "cli",
 }
 
 
@@ -328,18 +336,22 @@ def test_setup_commands_are_accounted_for_without_recursive_pytest_or_uv_sync():
                 # CLI portions and the real wheel installation have their own tests.
                 continue
             if command[:3] == ["uv", "pip", "install"]:
-                assert example.identifier == "guide-wheel-install"
+                assert example.identifier in {
+                    "guide-wheel-install",
+                    "visualization-install",
+                }
                 continue
             if command[:1] == ["cryoflake"]:
                 continue
             if command[:2] == ["uv", "sync"]:
-                assert command == ["uv", "sync", "--locked"] or command == [
-                    "uv",
-                    "sync",
-                    "--locked",
-                    "--dev",
-                ]
+                assert command in (
+                    ["uv", "sync", "--locked"],
+                    ["uv", "sync", "--locked", "--dev"],
+                    ["uv", "sync", "--locked", "--dev", "--extra", "vis"],
+                )
                 assert "uv sync --locked --dev" in ci
+                if "--extra" in command:
+                    assert " ".join(command) in ci
             elif command[:3] == ["uv", "run", "pytest"]:
                 if command[3:] == ["tests/documentation"]:
                     assert " ".join(command) in ci

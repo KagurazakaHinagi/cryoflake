@@ -74,6 +74,7 @@ Start at the [documentation index](docs/README.md), or choose a reference:
 | [Configuration](docs/configuration.md) | Hydra groups, typed settings, defaults, overrides, and credentials |
 | [Data contracts](docs/data-contracts.md) | CSVs, artifact lists, training arrays, embeddings, enums, and split reports |
 | [Artifact format](docs/artifact-format.md) | Versioned NPZ+JSON metadata, tree nodes, archives, hashes, and publication rules |
+| [Visualization](docs/visualization.md) | Optional MolStar and ChimeraX views of artifact structure, sequence, and density |
 | [Python API](docs/api-reference.md) | Storage, validation, readers, targets, manifests, and extension points |
 | [Development](docs/development.md) | uv setup, Ruff, tests, and distribution builds |
 
