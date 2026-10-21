@@ -176,6 +176,114 @@ def test_backbone_reconstruction_preserves_world_geometry_and_observed_sequences
     assert block["entity_poly_seq"]["num"].as_array(int).tolist() == [1, 2, 1]
 
 
+def test_interleaved_chains_preserve_sequence_order_and_mixed_polymer_chemistry(
+    tmp_path,
+):
+    artifact_mapping = _artifact_mapping()
+    artifact_mapping["backbone_coordinates"] = {
+        name: np.arange(12, dtype=np.float32).reshape(4, 3) + atom_index / 8
+        for atom_index, name in enumerate(("CA", "C", "N", "O", "P"))
+    }
+    artifact_mapping["residue_info"] = {
+        "aa_type": ["ALA", "ARG", "ASN", "ASP"],
+        "nuc_type": ["DA", "U", "C", "DG"],
+    }
+    artifact_mapping["full_atom_targets"] = {
+        "chain_index": np.asarray([4, 2, 4, 2, 7, 8, 7, 9]),
+        "residue_index": np.asarray([-10, 90, 5, 91, 8, -3, 11, 2]),
+    }
+    bundle = reconstruct_artifact(
+        _write_artifact(tmp_path, artifact_mapping), tmp_path / "view"
+    )
+    summary = json.loads(bundle.summary_path.read_text())
+    assert summary["chains"] == [
+        {
+            "chain_id": "POLYMER_4",
+            "polymer_kind": "protein",
+            "sequence": "AN",
+            "residue_count": 2,
+            "residue_indices": [-10, 5],
+        },
+        {
+            "chain_id": "POLYMER_2",
+            "polymer_kind": "protein",
+            "sequence": "RD",
+            "residue_count": 2,
+            "residue_indices": [90, 91],
+        },
+        {
+            "chain_id": "POLYMER_7",
+            "polymer_kind": "nucleic_acid",
+            "sequence": "AC",
+            "residue_count": 2,
+            "residue_indices": [8, 11],
+        },
+        {
+            "chain_id": "POLYMER_8",
+            "polymer_kind": "nucleic_acid",
+            "sequence": "U",
+            "residue_count": 1,
+            "residue_indices": [-3],
+        },
+        {
+            "chain_id": "POLYMER_9",
+            "polymer_kind": "nucleic_acid",
+            "sequence": "G",
+            "residue_count": 1,
+            "residue_indices": [2],
+        },
+    ]
+    assert bundle.sequence_path.read_text() == (
+        ">POLYMER_4 observed_protein\nAN\n"
+        ">POLYMER_2 observed_protein\nRD\n"
+        ">POLYMER_7 observed_nucleic_acid\nAC\n"
+        ">POLYMER_8 observed_nucleic_acid\nU\n"
+        ">POLYMER_9 observed_nucleic_acid\nG\n"
+    )
+    block = pdbx.CIFFile.read(bundle.structure_path)["cryoflake"]
+    assert block["struct_asym"]["id"].as_array(str).tolist() == [
+        "POLYMER_4",
+        "POLYMER_2",
+        "POLYMER_7",
+        "POLYMER_8",
+        "POLYMER_9",
+    ]
+    assert block["entity_poly"]["type"].as_array(str).tolist() == [
+        "polypeptide(L)",
+        "polypeptide(L)",
+        "polydeoxyribonucleotide/polyribonucleotide hybrid",
+        "polyribonucleotide",
+        "polydeoxyribonucleotide",
+    ]
+    assert block["entity_poly_seq"]["num"].as_array(int).tolist() == [
+        1,
+        1,
+        2,
+        2,
+        1,
+        1,
+        2,
+        1,
+    ]
+    assert block["entity_poly_seq"]["entity_id"].as_array(str).tolist() == [
+        "1",
+        "2",
+        "1",
+        "2",
+        "3",
+        "4",
+        "3",
+        "5",
+    ]
+    atoms = _read_structure(bundle.structure_path)
+    assert atoms.res_id.tolist() == [-10] * 4 + [90] * 4 + [5] * 4 + [91] * 4 + [
+        8,
+        -3,
+        11,
+        2,
+    ]
+
+
 def test_components_preserve_masks_topology_elements_occupancy_and_distinct_instances(
     tmp_path,
 ):

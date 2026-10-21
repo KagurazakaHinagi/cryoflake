@@ -1,5 +1,6 @@
 """Read-only local viewer routes, asset packaging, and HTTP isolation."""
 
+import json
 from io import BytesIO
 from types import SimpleNamespace
 from wsgiref.util import setup_testing_defaults
@@ -17,7 +18,10 @@ def bundle(tmp_path):
         "structure_path": ("structure.cif", b"data_structure\n"),
         "density_path": ("density.mrc", b"\x00\x01\x02\xff"),
         "sequence_path": ("sequence.fasta", b">POLYMER_0\nACD\n"),
-        "summary_path": ("summary.json", b'{"schema_version": 1}\n'),
+        "summary_path": (
+            "summary.json",
+            b'{"schema_version": 1, "artifact_reference": "data/artifacts/example"}\n',
+        ),
     }
     paths = {}
     for name, (filename, contents) in artifact_data.items():
@@ -77,6 +81,56 @@ def test_artifact_routes_serve_exact_reconstructed_data(
     assert "access-control-allow-origin" not in result["headers"]
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize(
+    "artifact_reference,encoded_artifact_name",
+    [
+        ("data/artifacts/example", "example"),
+        ("data/artifacts/example/metadata.json", "example"),
+        ("data/artifacts/example/", "example"),
+        ("data/artifacts/example/metadata.json/", "example"),
+        ("s3://my-bucket/artifacts/example", "example"),
+        ("s3://my-bucket/artifacts/example/metadata.json", "example"),
+        ("s3://my-bucket/artifacts/example/", "example"),
+        ("s3://my-bucket/artifacts/example/metadata.json/", "example"),
+        ("example", "example"),
+        (".", "current-artifact"),
+        ("metadata.json", "current-artifact"),
+        ("./metadata.json", "current-artifact"),
+        ("..", "parent-artifact"),
+        ("../metadata.json", "parent-artifact"),
+        ("data/artifacts/map.v2 例", "map.v2%20%E4%BE%8B"),
+        ("s3://my-bucket/artifacts/map.v2 例", "map.v2%20%E4%BE%8B"),
+        ("/", "artifact"),
+    ],
+)
+def test_download_filenames_use_the_artifact_folder_and_preserve_payloads(
+    bundle, tmp_path, monkeypatch, method, artifact_reference, encoded_artifact_name
+):
+    artifact_dir = tmp_path / "parent-artifact" / "current-artifact"
+    artifact_dir.mkdir(parents=True)
+    monkeypatch.chdir(artifact_dir)
+    bundle.summary_path.write_text(
+        json.dumps({"schema_version": 1, "artifact_reference": artifact_reference})
+    )
+    application = server_module._visualization_application(bundle)
+    for attribute in [
+        "structure_path",
+        "density_path",
+        "sequence_path",
+        "summary_path",
+    ]:
+        asset_path = getattr(bundle, attribute)
+        result = _request(application, f"/{asset_path.name}", method=method)
+        filename = f"{encoded_artifact_name}_{asset_path.name}"
+        assert result["status"] == 200
+        assert result["headers"]["content-disposition"] == (
+            f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
+        )
+        assert result["body"] == (asset_path.read_bytes() if method == "GET" else b"")
+        assert result["headers"]["content-length"] == str(asset_path.stat().st_size)
+
+
 @pytest.mark.parametrize(
     "route,content_type,expected",
     [
@@ -113,11 +167,12 @@ def test_only_allowlisted_routes_are_available(bundle, route):
 
 @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 def test_viewer_rejects_mutating_and_cross_origin_methods(bundle, method):
+    original_summary = bundle.summary_path.read_bytes()
     result = _request(
         server_module._visualization_application(bundle), "/summary.json", method=method
     )
     assert result["status"] == 405
-    assert bundle.summary_path.read_bytes() == b'{"schema_version": 1}\n'
+    assert bundle.summary_path.read_bytes() == original_summary
 
 
 @pytest.mark.parametrize("route", ["/", "/app.css", "/density.mrc"])

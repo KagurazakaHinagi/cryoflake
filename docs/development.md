@@ -37,6 +37,10 @@ temporary directories. S3 clients and model adapters are replaced with test
 doubles, so the suite does not need cloud credentials, network downloads, or
 model weights. Structure tests exercise Biotite parsing directly.
 
+Install Node.js 22 to run the offline visualization control tests. They execute
+the shipped webpage JavaScript with its HTML controls and a stubbed MolStar
+boundary. CI installs Node.js 22 before running the documentation suite.
+
 Storage tests cover the [NPZ+JSON format](artifact-format.md), integrity,
 selective loading, and sequence replacement. Training validators are checked
 against the [data contracts](data-contracts.md). Workflow tests cover

@@ -46,6 +46,29 @@ data is served locally and is not uploaded to the CDN.
 Use the structure and sequence controls to inspect residues alongside the
 density overlay. The page provides density visibility, contour, and opacity
 controls, along with downloads of the reconstructed data.
+Browser download filenames include the artifact folder name as a prefix:
+an artifact in `data/artifacts/example` saves as `example_structure.cif`,
+`example_density.mrc`, `example_sequence.fasta`, and `example_summary.json`.
+The sequence panel inserts spaces every five residues for readability.
+Click a sequence to remove the grouping spaces and select all residues in a
+read-only text box. Clicking elsewhere restores the five-residue grouping.
+
+The density contour starts at 1 σ and opacity at 25%. Adjust either slider, or
+click its displayed number to open a synchronized text box without increment
+or decrement buttons. Valid text previews the change as you type; press Enter
+or click away to finish. Press Escape to restore the value from before editing.
+Invalid text keeps the editor open with an inline validation message and
+preserves the last valid value.
+
+Dragging the contour slider rounds and displays its value to three decimal
+places in σ. The opacity slider uses whole percentages. Text entry keeps the
+precision you type.
+
+Contour levels are standard deviations from the map mean: the absolute contour
+is `mean + level × standard deviation`. Any finite level is valid, including
+fractional, zero, and negative levels; values beyond the slider's initial range
+expand that range. Opacity accepts percentages from 0 to 100, including
+fractional percentages.
 
 To open the displayed URL yourself and use a specific port:
 
@@ -81,7 +104,8 @@ cryoflake visualize data/artifacts/example --viewer chimerax \
 ```
 
 The generated ChimeraX session opens the structure, sequence viewer, and density
-map together. The command waits for ChimeraX to exit.
+map together. The density is shown as a surface with 45% transparency. The command
+waits for ChimeraX to exit.
 
 ## Understand the reconstruction
 

@@ -66,7 +66,7 @@ def _launch_chimerax(
         "run(session, 'show #1 atoms')\n"
         "run(session, 'style #1 stick')\n"
         "run(session, 'color #1 bychain')\n"
-        "run(session, 'volume #2 style mesh transparency 45')\n"
+        "run(session, 'volume #2 style surface transparency 0.45 show')\n"
         # Open individual sequences: a multi-FASTA can mix polymer types and
         # chain lengths, so treating it as one alignment would be misleading.
         + sequence_commands

@@ -28,17 +28,34 @@
           <fieldset id="display-controls" disabled>
             <label class="toggle"><span>Atomic structure</span><input id="show-structure" type="checkbox" checked></label>
             <label class="toggle"><span>Density overlay</span><input id="show-density" type="checkbox" checked></label>
-            <label class="slider-label" for="density-level">Density level <output id="density-level-value">1.0 σ</output></label>
-            <input id="density-level" type="range" min="-3" max="8" step="0.1" value="1" aria-describedby="level-help">
+            <div class="slider-label">
+              <label for="density-level">Density contour level</label>
+              <span class="density-value-editor">
+                <button id="density-level-value" type="button" aria-label="Edit density contour level" aria-expanded="false" aria-controls="density-level-number" title="Click to edit the level in σ">1.0 σ</button>
+                <input id="density-level-number" type="text" value="1" inputmode="decimal" aria-label="Density contour level in sigma" aria-describedby="level-help contour-validation" aria-invalid="false" hidden>
+                <span id="density-level-unit" aria-hidden="true" hidden>σ</span>
+              </span>
+            </div>
+            <input id="density-level" type="range" min="-3" max="8" step="any" value="1" aria-describedby="level-help">
             <p id="level-help" class="muted">Contour = mean + level × standard deviation.</p>
-            <label class="slider-label" for="density-opacity">Density opacity <output id="density-opacity-value">25%</output></label>
-            <input id="density-opacity" type="range" min="0" max="1" step="0.05" value="0.25">
+            <p id="contour-validation" class="control-validation" role="status" hidden>Enter a finite number in σ. The last valid level remains displayed.</p>
+            <div class="slider-label">
+              <label for="density-opacity">Density opacity</label>
+              <span class="density-value-editor">
+                <button id="density-opacity-value" type="button" aria-label="Edit density opacity" aria-expanded="false" aria-controls="density-opacity-number" title="Click to edit opacity in %">25%</button>
+                <input id="density-opacity-number" type="text" value="25" inputmode="decimal" aria-label="Density opacity in percent" aria-describedby="opacity-validation" aria-invalid="false" hidden>
+                <span id="density-opacity-unit" aria-hidden="true" hidden>%</span>
+              </span>
+            </div>
+            <input id="density-opacity" type="range" min="0" max="1" step="any" value="0.25">
+            <p id="opacity-validation" class="control-validation" role="status" hidden>Enter a finite percentage from 0 to 100. The last valid opacity remains displayed.</p>
             <button id="reset-camera" type="button">Reset camera <span aria-hidden="true">↗</span></button>
           </fieldset>
         </section>
         <section>
           <h2>Sequence <span id="sequence-count" class="count"></span></h2>
           <p class="muted">Use the sequence bar above the 3D view to locate residues.</p>
+          <p class="muted">Click a sequence below to select it without spaces. Click elsewhere to restore grouping.</p>
           <div id="sequences" class="sequences">Loading sequences…</div>
         </section>
         <section id="limitations-section" hidden>

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
+from io import BytesIO
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from wsgiref.util import setup_testing_defaults
 
 import mrcfile
 import numpy as np
@@ -15,10 +20,47 @@ from cryoflake.storage.store import (
     load_preprocessed_artifact,
     write_preprocessed_artifact,
 )
+from cryoflake.visualization.server import _visualization_application
 
 from .examples import get_example
 
 pytestmark = pytest.mark.documentation
+
+
+def _assert_browser_downloads(bundle, artifact_name):
+    application = _visualization_application(bundle)
+    for asset_path in [
+        bundle.structure_path,
+        bundle.density_path,
+        bundle.sequence_path,
+        bundle.summary_path,
+    ]:
+        environ = {}
+        setup_testing_defaults(environ)
+        environ.update(
+            PATH_INFO=f"/{asset_path.name}",
+            REQUEST_METHOD="GET",
+            HTTP_HOST="127.0.0.1:8888",
+            SERVER_PORT="8888",
+            **{"wsgi.input": BytesIO()},
+        )
+        response = {}
+
+        def start_response(status, headers, exc_info=None):
+            response["status"] = status
+            response["headers"] = dict(headers)
+
+        body = application(environ, start_response)
+        try:
+            assert b"".join(body) == asset_path.read_bytes()
+        finally:
+            if hasattr(body, "close"):
+                body.close()
+        assert response["status"] == "200 OK"
+        filename = f"{artifact_name}_{asset_path.name}"
+        assert response["headers"]["Content-Disposition"] == (
+            f"attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"
+        )
 
 
 def _assert_reconstruction(bundle, artifact_mapping, *, mode="backbone"):
@@ -108,6 +150,7 @@ def test_molstar_examples_reconstruct_aligned_data_before_serving(
 
     def serve(bundle, **options):
         _assert_reconstruction(bundle, artifact_mapping)
+        _assert_browser_downloads(bundle, "example")
         served.append((bundle, options))
 
     monkeypatch.setattr(visualization, "_serve_molstar", serve)
@@ -153,18 +196,56 @@ def test_chimerax_example_selects_executable_and_exports_the_same_data(
     executable.chmod(0o755)
     artifact_mapping = load_preprocessed_artifact("data/artifacts/example")
     launched = []
+    observed_commands = []
+    commands = ModuleType("chimerax.core.commands")
+    commands.run = lambda session, command: observed_commands.append(command)
+    commands.StringArg = SimpleNamespace(unparse=json.dumps)
+    monkeypatch.setitem(sys.modules, "chimerax", ModuleType("chimerax"))
+    monkeypatch.setitem(sys.modules, "chimerax.core", ModuleType("chimerax.core"))
+    monkeypatch.setitem(sys.modules, "chimerax.core.commands", commands)
+    launch_chimerax = visualization._launch_chimerax
 
     def launch(bundle, *, chimerax_path):
         _assert_reconstruction(bundle, artifact_mapping)
         launched.append(chimerax_path)
+        launch_chimerax(bundle, chimerax_path=chimerax_path)
+
+    def run(arguments, *, check):
+        assert arguments[0] == str(executable)
+        assert check is True
+        script_path = Path(arguments[1])
+        exec(
+            compile(script_path.read_text(), str(script_path), "exec"),
+            {"session": object()},
+        )
 
     monkeypatch.setattr(visualization, "_launch_chimerax", launch)
+    monkeypatch.setattr(visualization.subprocess, "run", run)
     (command,) = get_example("visualization-chimerax").commands(
         {"/opt/ChimeraX/bin/ChimeraX": str(executable)}
     )
     doc_workspace.invoke(command)
 
     assert launched == [str(executable)]
+    export_dir = doc_workspace.root / "data/visualizations/chimerax"
+    assert observed_commands[:2] == [
+        "open " + json.dumps(str(export_dir / "structure.cif")),
+        "open " + json.dumps(str(export_dir / "density.mrc")),
+    ]
+    (density_command,) = [
+        command.split()
+        for command in observed_commands
+        if command.startswith("volume ")
+    ]
+    assert density_command[:4] == ["volume", "#2", "style", "surface"]
+    transparency = float(density_command[density_command.index("transparency") + 1])
+    assert 0 <= transparency < 1
+    assert transparency == pytest.approx(0.45)
+    assert "show" in density_command
+    assert [
+        command for command in observed_commands if command.startswith("sequence ")
+    ] == ["sequence chain #1/POLYMER_0", "sequence chain #1/POLYMER_1"]
+    assert observed_commands[-1] == "view"
 
 
 def test_atom_name_example_restores_masked_polymer_atoms(doc_workspace, monkeypatch):

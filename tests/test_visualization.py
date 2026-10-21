@@ -200,7 +200,7 @@ def test_chimerax_script_quotes_paths_and_waits_for_gui(monkeypatch, tmp_path):
     assert calls[0][1] == {"check": True}
     source = calls[0][2]
     assert "StringArg.unparse" in source
-    assert "volume #2 style mesh transparency 45" in source
+    assert "volume #2 style surface transparency 0.45 show" in source
     assert "sequence chain #1/POLYMER_0" in source
     assert "sequence chain #1/POLYMER_1" in source
 
@@ -244,6 +244,17 @@ def test_chimerax_startup_script_opens_each_sequence_individually(
         "open " + json.dumps(str(bundle.structure_path)),
         "open " + json.dumps(str(bundle.density_path)),
     ]
+    (density_command,) = [
+        command.split()
+        for command in observed_commands
+        if command.startswith("volume ")
+    ]
+    assert density_command[:4] == ["volume", "#2", "style", "surface"]
+    transparency = float(density_command[density_command.index("transparency") + 1])
+    # ChimeraX volume transparency is a fraction; 45 would make the map invisible.
+    assert 0 <= transparency < 1
+    assert transparency == pytest.approx(0.45)
+    assert "show" in density_command
     assert [
         command for command in observed_commands if command.startswith("sequence")
     ] == [f"sequence chain #1/{chain_id}" for chain_id in chain_ids]

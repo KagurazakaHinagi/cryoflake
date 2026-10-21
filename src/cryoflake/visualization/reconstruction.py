@@ -435,11 +435,16 @@ def _write_structure(residues: list[_Residue], structure_path: Path) -> None:
     # retaining signed author residue indices, insertion codes, and chain IDs.
     label_indices = []
     chain_counters = {}
+    polymer_types_by_chain = {}
     for residue in residues:
         chain_counters[residue.chain_id] = chain_counters.get(residue.chain_id, 0) + 1
         label_indices.extend(
             [chain_counters[residue.chain_id]] * len(residue.atom_names)
         )
+        if residue.entity_poly_type is not None:
+            polymer_types_by_chain.setdefault(residue.chain_id, set()).add(
+                residue.entity_poly_type
+            )
     block["atom_site"]["label_seq_id"] = np.asarray(label_indices, dtype=np.int64)
     # Biotite's atom_site writer preserves atom values; these chemistry metadata
     # help standalone viewers recognize polymer entities in sparse backbone views.
@@ -451,14 +456,11 @@ def _write_structure(residues: list[_Residue], structure_path: Path) -> None:
     block["struct_asym"] = pdbx.CIFCategory(
         {"id": chain_ids, "entity_id": list(entity_ids.values())}
     )
-    polymer_chains = {
-        residue.chain_id for residue in residues if residue.entity_poly_type is not None
-    }
     block["entity"] = pdbx.CIFCategory(
         {
             "id": list(entity_ids.values()),
             "type": [
-                "polymer" if chain_id in polymer_chains else "non-polymer"
+                "polymer" if chain_id in polymer_types_by_chain else "non-polymer"
                 for chain_id in chain_ids
             ],
         }
@@ -467,19 +469,15 @@ def _write_structure(residues: list[_Residue], structure_path: Path) -> None:
     block["chem_comp"] = pdbx.CIFCategory(
         {"id": list(components), "type": list(components.values())}
     )
-    if polymer_chains:
+    if polymer_types_by_chain:
         polymer_chain_ids = [
-            chain_id for chain_id in chain_ids if chain_id in polymer_chains
+            chain_id for chain_id in chain_ids if chain_id in polymer_types_by_chain
         ]
         polymer_types = []
         for chain_id in polymer_chain_ids:
-            types = {
-                residue.entity_poly_type
-                for residue in residues
-                if residue.chain_id == chain_id and residue.entity_poly_type is not None
-            }
+            types = polymer_types_by_chain[chain_id]
             polymer_types.append(
-                types.pop()
+                next(iter(types))
                 if len(types) == 1
                 else "polydeoxyribonucleotide/polyribonucleotide hybrid"
                 if types <= {"polyribonucleotide", "polydeoxyribonucleotide"}
@@ -517,6 +515,7 @@ def _write_structure(residues: list[_Residue], structure_path: Path) -> None:
 
 def _chain_sequences(residues: list[_Residue]) -> list[dict]:
     chains = {}
+    sequence_letters = {}
     for residue in residues:
         if residue.polymer_kind is None:
             continue
@@ -528,14 +527,17 @@ def _chain_sequences(residues: list[_Residue]) -> list[dict]:
                 "residue_count": 0,
                 "residue_indices": [],
             }
+            sequence_letters[residue.chain_id] = []
         chain = chains[residue.chain_id]
-        chain["sequence"] += (
+        sequence_letters[residue.chain_id].append(
             _PROTEIN_LETTERS[residue.residue_name]
             if residue.polymer_kind == "protein"
             else residue.residue_name.removeprefix("D")
         )
         chain["residue_count"] += 1
         chain["residue_indices"].append(residue.residue_index)
+    for chain_id, chain in chains.items():
+        chain["sequence"] = "".join(sequence_letters[chain_id])
     return list(chains.values())
 
 

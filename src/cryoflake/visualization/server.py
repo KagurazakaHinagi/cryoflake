@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import os
 from importlib.resources import files
+from pathlib import Path
 from socketserver import ThreadingMixIn
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from bottle import Bottle, HTTPError, request, response, static_file
+
+from cryoflake.storage.store import preprocessed_artifact_root
 
 if TYPE_CHECKING:
     from cryoflake.visualization.reconstruction import VisualizationBundle
@@ -25,6 +31,13 @@ class _QuietRequestHandler(WSGIRequestHandler):
 
 
 def _visualization_application(bundle: VisualizationBundle) -> Bottle:
+    summary = json.loads(bundle.summary_path.read_text(encoding="utf-8"))
+    artifact_root = preprocessed_artifact_root(summary["artifact_reference"])
+    artifact_name = (
+        Path(os.path.abspath(artifact_root)).name
+        if isinstance(artifact_root, Path)
+        else artifact_root.rsplit("/", 1)[-1]
+    ) or "artifact"
     application = Bottle()
     artifact_routes = {
         "/structure.cif": (bundle.structure_path, "chemical/x-mmcif"),
@@ -75,10 +88,17 @@ def _visualization_application(bundle: VisualizationBundle) -> Bottle:
 
     def serve_artifact():
         artifact_path, content_type = artifact_routes[request.path]
+        encoded_filename = quote(f"{artifact_name}_{artifact_path.name}", safe="")
         return static_file(
             artifact_path.name,
             root=str(artifact_path.parent),
             mimetype=content_type,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{encoded_filename}"; '
+                    f"filename*=UTF-8''{encoded_filename}"
+                )
+            },
         )
 
     def serve_static():
