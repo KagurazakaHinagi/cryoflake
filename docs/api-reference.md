@@ -107,6 +107,17 @@ The result contains `artifact_reference`, `grid_shape`, `protein_nodes`,
 `sequence_feature_dim`. The last two fields are `None` without embeddings.
 `result.to_json()` returns a JSON summary.
 
+## Built-in preprocessing adapter
+
+`cryoflake.adapters.preprocess.default.run(*, map_path, structure_path, artifact_reference, target_voxel_size=1.0, original_structure_path=None, fasta_path=None, fix_shift=True, interface_contact_cutoff=5.0, s3_endpoint_url=None)`
+is the callable selected by CLI `--preprocess-adapter default`. Call it directly
+or inject it into a Python pipeline. It returns `None` after writing a complete
+NPZ+JSON training artifact locally or to S3. It uses CPU map preparation and
+observed structure geometry, without model weights or sequence embeddings.
+The [user guide](user-guide.md#choose-a-preprocessing-adapter) documents input
+formats, origin correction, optional FASTA records, and the custom adapter
+interface.
+
 ## Compose and run pipelines
 
 [`cryoflake.config`](../src/cryoflake/config.py) provides:
@@ -181,8 +192,9 @@ Backbone readers accept uncompressed `.pdb`, `.ent`, `.cif`, and `.mmcif`.
 They use the first model unless `all_models=True`, which concatenates the
 per-model results. Residues are grouped using author chain/residue identifiers;
 mmCIF uses the first data block. Returned `residue_info` includes chain labels
-but does not expose original residue numbers or insertion codes. Adapters must
-supply their own full-atom topology. Backbone alternatives use the first
+but does not expose original residue numbers or insertion codes. Use
+`cryoflake.targets.structure.load_full_atom_targets_from_structure(structure_path)`
+for observed full-atom targets and topology. Backbone alternatives use the first
 alternate identifier; component targets use highest occupancy with
 deterministic ties. The manifest pipeline materializes compressed inputs
 before invoking its adapter.
@@ -245,6 +257,7 @@ with TemporaryDirectory() as temporary:
 | `cryoflake.build_component_extension_targets(structure_path, *, global_origin, voxel_size, grid_shape, ...)` | Build component targets from mmCIF, with optional polymer context and interface cutoff. |
 | `cryoflake.validate_component_extension_targets(extension_targets)` | Validate and normalize schema, masks, indices, and component metadata. |
 | `cryoflake.targets.full_atom.extract_full_atom_targets(target_source)` | Extract aligned target attributes from an application object and reorder protein rows before nucleotide rows. The object must already supply the full target arrays and topology; this is not a structure parser or model. |
+| `cryoflake.targets.structure.load_full_atom_targets_from_structure(structure_path)` | Parse observed atoms and build normalized full-atom targets in protein-then-nucleotide row order, including deposited topology, masks, rigid frames, and torsions. |
 | `cryoflake.validate_full_atom_targets(targets, num_protein=None, num_nucleotide=None)` | Validate full-atom targets and optional backbone row counts. |
 | `cryoflake.validate_preprocessed_artifact_mapping(artifact_mapping, source=None)` | Check that the input implements `Mapping` and return the same object. This checks the input type only. |
 | `cryoflake.get_preprocessed_artifact_grid(artifact_mapping, source=None)`, `get_preprocessed_artifact_voxel_size(artifact_mapping, source=None)`, `get_preprocessed_artifact_global_origin(artifact_mapping, source=None)` | Read and normalize individual geometry fields. These do not validate the complete training artifact. |

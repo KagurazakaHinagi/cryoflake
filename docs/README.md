@@ -1,8 +1,9 @@
 # cryoFlake documentation
 
-cryoFlake manages cryo-EM dataset preparation and storage. It does not ship a
-raw preprocessing model or an embedding model; those are supplied by your
-application through explicit adapters.
+cryoFlake manages cryo-EM dataset preparation and storage. Select the built-in
+`default` adapter to turn raw maps and structures into training artifacts, or
+supply a custom preprocessing callable. Sequence-model inference uses an
+application-supplied adapter.
 
 ## Choose a guide
 

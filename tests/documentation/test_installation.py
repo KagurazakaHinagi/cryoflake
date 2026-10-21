@@ -69,7 +69,7 @@ def built_distributions(tmp_path_factory):
 
 
 def test_documented_wheel_installation_works_outside_checkout(
-    tmp_path, built_distributions
+    tmp_path, built_distributions, doc_workspace
 ):
     uv, wheel, _ = built_distributions
     working = tmp_path / "application"
@@ -110,9 +110,16 @@ def test_documented_wheel_installation_works_outside_checkout(
             str(python),
             "-c",
             (
-                "import json; import cryoflake; "
+                "import importlib.util; import json; import cryoflake; "
+                "from cryoflake.adapters.preprocess import default as default_preprocess; "
                 "from cryoflake.config import compose_config; "
-                "print(json.dumps({'file': cryoflake.__file__, 'pipelines': "
+                "print(json.dumps({'file': cryoflake.__file__, "
+                "'default_adapter_file': default_preprocess.__file__, "
+                "'default_adapter_module': default_preprocess.run.__module__, "
+                "'default_adapter_callable': callable(default_preprocess.run), "
+                "'removed_adapter_namespace': "
+                "importlib.util.find_spec('cryoflake.preprocess.adapters') is None, "
+                "'pipelines': "
                 "[compose_config(pipeline=name).pipeline.name "
                 "for name in ('manifest', 'preprocess', 'validate')]}))"
             ),
@@ -122,7 +129,22 @@ def test_documented_wheel_installation_works_outside_checkout(
     )
     loaded = json.loads(probe.stdout)
     assert Path(loaded["file"]).is_relative_to(environment)
+    assert Path(loaded["default_adapter_file"]).is_relative_to(environment)
+    assert loaded["default_adapter_module"] == "cryoflake.adapters.preprocess.default"
+    assert loaded["default_adapter_callable"] is True
+    assert loaded["removed_adapter_namespace"] is True
     assert loaded["pipelines"] == ["manifest", "preprocess", "validate"]
+
+    (working / "data").mkdir()
+    for name in ("map.mrc", "model.cif"):
+        shutil.copyfile(doc_workspace.root / "data" / name, working / "data" / name)
+    for command in get_example("guide-single").commands():
+        result = _run(["cryoflake", *command], cwd=working, env=child_env)
+    validated = json.loads(result.stdout)
+    assert validated["grid_shape"] == [86, 86, 86]
+    assert validated["protein_nodes"] == validated["nucleotide_nodes"] == 1
+    assert validated["component_nodes"] == 1
+    assert validated["sequence_length"] is None
 
 
 def test_source_distribution_keeps_documentation_tests_and_public_guides(

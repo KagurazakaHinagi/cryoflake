@@ -64,8 +64,10 @@ Use top-level fences: quoted or list-embedded fences are rejected explicitly
 so they cannot bypass example coverage.
 
 Tests execute Python blocks verbatim and pass CLI command arguments to Typer.
-Temporary workspaces supply real MRC/mmCIF inputs and NPZ+JSON artifacts, with
-injected application adapters, generators, and in-memory HTTP/S3 transports.
+Temporary workspaces supply real MRC/mmCIF inputs and NPZ+JSON artifacts. The
+single-artifact and batch examples exercise the built-in `default` adapter;
+extension scenarios use injected application adapters and generators. HTTP/S3
+transports run in memory.
 They block live network calls and isolate credentials. Option fragments are
 combined with their documented base command, and examples assert artifacts,
 arrays, reports, geometry boundaries, and settings rather than only exit codes.

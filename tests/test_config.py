@@ -352,6 +352,20 @@ def test_adapter_configuration_rejects_malformed_dotted_names(specification):
         compose_config(values={"pipeline": {"preprocess_adapter": specification}})
 
 
+def test_default_preprocess_adapter_is_explicit_and_not_an_embedding_generator():
+    assert compose_config().pipeline.preprocess_adapter is None
+    config = compose_config(values={"pipeline": {"preprocess_adapter": "default"}})
+    assert config.pipeline.preprocess_adapter == "default"
+    with pytest.raises(ValueError, match="sequence_embedding_generator.*MODULE"):
+        compose_config(values={"pipeline": {"sequence_embedding_generator": "default"}})
+
+
+@pytest.mark.parametrize("specification", ["Default", "builtin"])
+def test_unknown_preprocess_adapter_names_are_not_silently_replaced(specification):
+    with pytest.raises(ValueError, match="preprocess_adapter.*default.*MODULE"):
+        compose_config(values={"pipeline": {"preprocess_adapter": specification}})
+
+
 @pytest.mark.parametrize(
     "template", ["{unknown}", "{wwpdb_id", "{}", "{wwpdb_id.__class__}"]
 )

@@ -36,6 +36,7 @@ from cryoflake.preprocess.checkpoint import PREPROCESS_CHECKPOINT_FORMAT_VERSION
 from cryoflake.preprocess.summary import PREPROCESS_SUMMARY_FIELDNAMES
 from cryoflake.storage.codec import read_metadata
 from cryoflake.storage.transports import is_remote_uri
+from cryoflake.targets._chemistry import ATOM_NAMES, RESIDUE_NAMES
 
 from .examples import get_example
 
@@ -264,6 +265,30 @@ def test_full_atom_shape_and_dtype_table_matches_validated_targets(doc_workspace
         )
         assert normalized[name].shape == expected_shape, name
         assert normalized[name].dtype == np.dtype(dtype.strip("`")), name
+
+
+def test_builtin_target_vocabulary_table_matches_structure_target_slots():
+    section = _reference_section(
+        "contract-geometry", "### Built-in full-atom conventions"
+    )
+    rows = _table_rows(section)
+    residue_names = [
+        name
+        for label, names in rows
+        if label.startswith("Residue indices ")
+        for name in re.findall(r"`([^`]+)`", names)
+    ]
+    atom_names = [
+        name
+        for label, names in rows
+        if label.startswith("Atom slots ")
+        for name in re.findall(r"`([^`]+)`", names)
+    ]
+
+    assert residue_names == list(RESIDUE_NAMES)
+    assert atom_names == list(ATOM_NAMES)
+    assert len(residue_names) == 31
+    assert len(atom_names) == 65
 
 
 def test_component_fields_and_enum_tables_match_validated_schema(doc_workspace):

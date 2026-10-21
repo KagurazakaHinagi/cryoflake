@@ -1,10 +1,10 @@
 # User guide
 
-cryoFlake prepares map/structure manifests, downloads raw inputs, runs your
+cryoFlake prepares map/structure manifests, downloads raw inputs, runs a
 preprocessing adapter, validates training artifacts, and writes artifact lists.
 Artifacts are local directories or S3 prefixes holding NPZ arrays and JSON
-metadata. Your application supplies raw preprocessing and sequence-model
-inference through explicit adapters.
+metadata. Use the built-in `default` adapter for raw preprocessing or supply
+your own callable. Sequence-model inference requires an application adapter.
 
 Use the [configuration reference](configuration.md) for settings,
 [data contracts](data-contracts.md) for payload/tabular schemas, the
@@ -31,8 +31,8 @@ uv pip install /absolute/path/to/cryoflake-0.1.0-py3-none-any.whl
 cryoflake --help
 ```
 
-Packaged configuration groups work outside the checkout. Install your adapter
-and its model dependencies in the same environment. `python -m cryoflake`
+Packaged configuration groups and the `default` adapter work outside the
+checkout. Install custom adapters and their dependencies in the same environment. `python -m cryoflake`
 also runs the CLI; each subcommand has `--help`.
 
 ## Prepare a manifest
@@ -92,9 +92,28 @@ HTTP/network errors abort the command, including timeouts and server errors.
 Downloads target the standard `.map.gz` and `.cif.gz` filenames even when
 manifest creation selected an existing uncompressed input.
 
-## Provide a preprocessing adapter
+## Choose a preprocessing adapter
 
-The CLI imports your callable using `MODULE:CALLABLE`, for example
+Select `--preprocess-adapter default` to use the built-in CPU adapter. Adapter
+selection is explicit: `pipeline.preprocess_adapter` remains `null` until set.
+The built-in adapter reads MRC maps and fitted structures, pads maps to an even
+cube of at least 128 voxels per side, and resamples to the nearest supported
+even grid size for `target_voxel_size`. The artifact records the actual voxel
+size, which may differ from the requested spacing. It writes backbone labels,
+observed full-atom targets, and component/interface targets in cryoFlake's
+NPZ+JSON contract. It does not generate sequence embeddings or require model
+weights. See the [full-atom conventions](data-contracts.md#full-atom-supervision).
+
+Raw maps use `.mrc` or `.map`; structures use `.cif`, `.mmcif`, `.pdb`, or `.ent`.
+The built-in adapter accepts gzip-compressed inputs with an additional `.gz`
+suffix, including optional FASTA input, and uses the first structure model.
+`original_structure_path`, when supplied, provides the output structure
+coordinates and targets. With `fix_shift=True`, the map origin is translated
+by the difference between the original and fitted structures' finite CA/P
+centroids. Without an original structure there is no centroid translation.
+FASTA input adds sequence records and chain associations, not embeddings.
+
+For custom preprocessing, the CLI imports your callable using `MODULE:CALLABLE`, for example
 `my_app.preprocess:run`. It must be importable in the active environment.
 Its return value is ignored: it must write a complete training artifact at
 `artifact_reference`, which cryoFlake loads and validates before reporting success.
@@ -131,24 +150,24 @@ supplies target-building helpers; consult the [API reference](api-reference.md).
 
 ## Process one artifact
 
-With real inputs and your installed adapter:
+With real local inputs:
 
 <!-- doc-example: guide-single; mode=cli -->
 ```bash
 uv run cryoflake preprocess data/map.mrc data/model.cif data/artifacts/example \
-  --preprocess-adapter my_app.preprocess:run --target-voxel-size 1.5
+  --preprocess-adapter default --target-voxel-size 1.5
 uv run cryoflake validate-artifact data/artifacts/example
 ```
 
 Other options include `--original-structure-path`, `--fasta-path`,
 `--interface-contact-cutoff`, and the paired `--fix-shift` / `--no-fix-shift` flags. Add
 `-o pipeline.require_sequence_embeddings=true` to require sequence data.
-An S3 output works when the adapter uses its endpoint argument to write
-remotely.
+The built-in adapter supports S3 output and the configured endpoint. Custom
+adapters must use their endpoint argument when writing remotely.
 
 ## Process a batch
 
-With source associations, downloadable inputs, and your adapter:
+With source associations and downloadable inputs:
 
 <!-- doc-example: guide-batch; mode=cli -->
 ```bash
@@ -157,7 +176,7 @@ uv run cryoflake prepare-manifest \
   --maps-dir data/maps --structures-dir data/structures \
   --download --download-workers 4 \
   --artifact-output-dir data/artifacts \
-  --preprocess-adapter my_app.preprocess:run --preprocess-workers 2 \
+  --preprocess-adapter default --preprocess-workers 2 \
   --summary-csv data/summary.csv --artifact-list-path data/train.txt
 ```
 
@@ -191,8 +210,7 @@ For a generated or hand-edited manifest, use the direct Python API:
 
 <!-- doc-example: guide-batch-python; mode=python -->
 ```python
-from my_app.preprocess import run as adapter
-
+from cryoflake.adapters.preprocess.default import run as adapter
 from cryoflake.preprocess.manifest import preprocess_manifest_csv
 
 paths = preprocess_manifest_csv(

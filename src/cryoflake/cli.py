@@ -39,8 +39,8 @@ Adapter = Annotated[
     str | None,
     typer.Option(
         "--preprocess-adapter",
-        metavar="MODULE:CALLABLE",
-        help="Explicit raw preprocessing adapter; required when preprocessing.",
+        metavar="default|MODULE:CALLABLE",
+        help="Raw preprocessing adapter: built-in default or an importable callable.",
     ),
 ]
 
@@ -115,6 +115,10 @@ def _adapter(
 ) -> Callable[..., Any] | None:
     if specification is None:
         return None
+    if option == "--preprocess-adapter" and specification == "default":
+        from cryoflake.adapters.preprocess.default import run
+
+        return run
     try:
         return _load_adapter(specification, label=option.removeprefix("--"))
     except ValueError as exc:

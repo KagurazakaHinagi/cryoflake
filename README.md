@@ -3,8 +3,9 @@
 cryoFlake prepares, stores, and validates cryo-EM datasets. It provides EMDB
 manifests and downloads, Biotite structure and FASTA readers, molecular targets,
 sequence sidecars, dataset splits, resumable preprocessing, and local or
-S3-compatible NPZ+JSON storage. Your application supplies the raw preprocessing
-and optional embedding-model adapters.
+S3-compatible NPZ+JSON storage. The built-in `default` preprocessing adapter
+produces training artifacts without model weights. Applications can supply
+custom preprocessing and optional embedding-model adapters.
 
 ## Get started
 
@@ -27,8 +28,9 @@ uv run cryoflake prepare-manifest \
 ```
 
 Add `--download --workers 4` to fetch the source files. To preprocess them,
-select an application adapter with `--preprocess-adapter MODULE:CALLABLE` and an
-artifact directory with `--artifact-output-dir`. The [user guide](docs/user-guide.md)
+select `--preprocess-adapter default` and an artifact directory with
+`--artifact-output-dir`. Custom adapters use `MODULE:CALLABLE` instead of
+`default`. The [user guide](docs/user-guide.md)
 covers adapter requirements, embeddings, splits, checkpoint recovery, and S3.
 
 Inspect configuration or validate a complete training artifact:

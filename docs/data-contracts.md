@@ -147,6 +147,20 @@ The grid validator also accepts a readable safe NumPy grid payload, including
 compressed `arr_0` input. The artifact writer converts `density_grid` into an actual
 numeric array. For new adapters, supply the array directly.
 
+### Built-in preprocessing metadata
+
+In addition to the required training fields, `default` writes `shape`, an
+`int64` array containing `density_grid.shape` in `(Z, Y, X)` order, and `cella`,
+the corresponding physical side lengths `shape * voxel_size`. It also writes
+`grid_spectral_amplitude`, the float64 shell averages of the prepared density's
+real Fourier-transform amplitudes. Its length is `X // 2 + 1`.
+
+When `fasta_path` is supplied, `fasta` contains `sequences`, `sequence_names`,
+and `chain_to_seqid`. Each sequence is a portable mapping with `sequence`,
+`chain_count`, and `chain_ids`; the chain mapping points to zero-based sequence
+indices. These records do not populate the `sequence` embedding matrix.
+These optional fields do not change semantic contract version 3.
+
 ### Backbone and residue labels
 
 Let `P` be the protein-residue count and `Q` the nucleotide-residue count.
@@ -222,7 +236,7 @@ true entries followed by `Q` false entries.
 The package fixes these dimensions and the protein/nucleotide index rule. The
 adapter and consuming model must agree on the individual residue-index
 vocabulary, 65 atom-slot names/order, rigid-group meanings, frame convention,
-and torsion order. cryoFlake does not define or infer those mappings. The
+and torsion order. The built-in adapter uses the conventions below. The
 validator checks shapes, finiteness, masks, counts, and ordering; it does not
 prove that a frame is orthonormal, a sine/cosine pair has unit norm, or a
 masked atom has a zero coordinate. It also does not compare full-atom positions
@@ -236,6 +250,50 @@ controlled by masks and does not use the component padding rule below.
 protein object, reorders its rows into protein-then-nucleotide order, and
 validates the result. See
 [`targets/full_atom.py`](../src/cryoflake/targets/full_atom.py).
+
+### Built-in full-atom conventions
+
+The `default` adapter uses
+[`load_full_atom_targets_from_structure()`](../src/cryoflake/targets/structure.py)
+to build targets from the first deposited structure model. Protein rows precede
+nucleotide rows, matching the backbone arrays. `chain_index` numbers sorted
+author chain identifiers from zero; `residue_index` retains the author residue
+number. Insertion variants can share a residue index.
+
+The fixed vocabulary is listed in index order. The chemistry tables in
+[`targets/_chemistry.py`](../src/cryoflake/targets/_chemistry.py) also define
+residue-specific atom membership and the atoms used for each frame/torsion.
+
+| Index range | Names in order |
+| --- | --- |
+| Residue indices 0–19 | `ALA`, `ARG`, `ASN`, `ASP`, `CYS`, `GLN`, `GLU`, `GLY`, `HIS`, `ILE`, `LEU`, `LYS`, `MET`, `PHE`, `PRO`, `SER`, `THR`, `TRP`, `TYR`, `VAL` |
+| Residue indices 20–30 | `DA`, `DC`, `DG`, `DT`, `A`, `C`, `G`, `U`, `UNK`, `DN`, `N` |
+| Atom slots 0–9 | `N`, `CA`, `C`, `O`, `CB`, `CG`, `CD`, `NE`, `CZ`, `NH1` |
+| Atom slots 10–19 | `NH2`, `OD1`, `ND2`, `OD2`, `SG`, `OE1`, `NE2`, `OE2`, `ND1`, `CD2` |
+| Atom slots 20–29 | `CE1`, `CG1`, `CG2`, `CD1`, `CE`, `NZ`, `SD`, `CE2`, `OG`, `OG1` |
+| Atom slots 30–39 | `NE1`, `CE3`, `CZ2`, `CZ3`, `CH2`, `OH`, `OP1`, `P`, `OP2`, `O5'` |
+| Atom slots 40–49 | `C5'`, `C4'`, `O4'`, `C3'`, `O3'`, `C2'`, `C1'`, `N9`, `C4`, `N3` |
+| Atom slots 50–59 | `C2`, `N1`, `C6`, `C5`, `N7`, `C8`, `N6`, `O2`, `N4`, `N2` |
+| Atom slots 60–64 | `O6`, `O4`, `C7`, `O2'`, `OXT` |
+
+Only observed atoms receive true atom masks. Missing atoms, undefined torsions,
+and degenerate frames have zero values and false observation masks; absent or
+nonfinite B factors are zero. Atom alternatives use the same first alternate
+identifier policy as the backbone reader. The target builder does not complete
+missing atoms or infer unobserved conformations.
+
+Frames store a rotation and translation in `(3, 4)` form. Protein groups are
+backbone `0`, psi `3`, and chi1–chi4 `4`–`7`; groups `1`, `2`, and `8` are unused.
+Nucleotide groups are the phosphate backbone `0`, seven sugar/backbone groups
+`1`–`7`, and base group `8`; DNA has no O2'-dependent group `7`.
+Protein torsions are pre-omega, phi, psi, chi1–chi4, then an unused slot.
+Nucleotide torsions are alpha, beta, gamma, delta, nu2, nu1, nu0, and chi1;
+DNA masks nu0. Protein pre-omega/phi require adjacent author residue identities
+in the same chain and an observed peptide C–N distance of 0.5–2.0 Å.
+ASP chi2, GLU chi3, and PHE/TYR chi2 have pi-shifted alternatives and matching
+alternative rigid frames. The source defines the exact frame orientation and
+sine/cosine convention. Custom adapters must agree with the consuming model
+when choosing different conventions.
 
 ### Component extension, schema version 1
 

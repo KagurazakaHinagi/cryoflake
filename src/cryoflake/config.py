@@ -446,13 +446,20 @@ def validate_config(
                 )
     for name in ("preprocess_adapter", "sequence_embedding_generator"):
         if p[name] is not None:
+            if name == "preprocess_adapter" and p[name] == "default":
+                continue
             module, separator, attribute = p[name].partition(":")
             if not separator or not all(
                 part.isidentifier()
                 for dotted_name in (module.strip(), attribute.strip())
                 for part in dotted_name.split(".")
             ):
-                raise ValueError(f"{name} must use the MODULE:CALLABLE form")
+                choices = (
+                    "be 'default' or use the MODULE:CALLABLE form"
+                    if name == "preprocess_adapter"
+                    else "use the MODULE:CALLABLE form"
+                )
+                raise ValueError(f"{name} must {choices}")
     if require_inputs:
         required = {
             "manifest": ("source_csv", "manifest_csv"),
@@ -475,7 +482,8 @@ def validate_config(
             and not preprocess_adapter_provided
         ):
             raise ValueError(
-                "--artifact-output-dir requires --preprocess-adapter MODULE:CALLABLE"
+                "--artifact-output-dir requires --preprocess-adapter "
+                "default or MODULE:CALLABLE"
             )
         if (
             p.prepare_sequence_embeddings
