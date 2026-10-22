@@ -354,3 +354,135 @@ def test_npz_sidecars_reject_ignored_member_crc_corruption(tmp_path, member_name
 
     with pytest.raises(zipfile.BadZipFile, match="CRC"):
         load_sequence_embedding_file(path)
+
+
+_NPZ_MEMBER_COLLISIONS = [
+    "ignored_alias",
+    "supported_alias",
+    "suffix_alias",
+    "ignored_duplicate",
+    "supported_duplicate",
+]
+
+
+def _npy_bytes(array):
+    serialized = io.BytesIO()
+    np.lib.format.write_array(serialized, array)
+    return serialized.getvalue()
+
+
+def _write_shadowed_npz(path, collision, shadowed_content):
+    # Synthetic embeddings isolate ZIP name precedence and physical integrity.
+    sequence = np.arange(12, dtype=np.float64).reshape(3, 4)
+    names = {
+        "ignored_alias": ("extra.npy", "extra"),
+        "supported_alias": ("sequence.npy", "sequence"),
+        "suffix_alias": ("extra.npy.npy", "extra.npy"),
+        "ignored_duplicate": ("extra.npy", "extra.npy"),
+        "supported_duplicate": ("sequence.npy", "sequence.npy"),
+    }
+    shadowed_name, preferred_name = names[collision]
+    preferred_content = (
+        _npy_bytes(sequence)
+        if collision.startswith("supported_")
+        else b"unrelated raw metadata"
+    )
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        if not collision.startswith("supported_"):
+            archive.writestr("sequence.npy", _npy_bytes(sequence))
+        archive.writestr(shadowed_name, shadowed_content)
+        shadowed_member = archive.infolist()[-1]
+        if shadowed_name == preferred_name:
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                archive.writestr(preferred_name, preferred_content)
+        else:
+            archive.writestr(preferred_name, preferred_content)
+    return sequence, shadowed_member
+
+
+@pytest.mark.parametrize("collision", _NPZ_MEMBER_COLLISIONS)
+def test_npz_sidecars_preserve_preferred_member_with_name_collisions(
+    tmp_path, monkeypatch, collision
+):
+    path = tmp_path / "embedding.npz"
+    expected, _ = _write_shadowed_npz(
+        path, collision, _npy_bytes(np.full((3, 4), 500.0))
+    )
+    with np.load(path, allow_pickle=False) as archive:
+        # NpzFile prefers exact names and the last physical duplicate.
+        np.testing.assert_array_equal(archive["sequence"], expected)
+        archive_type = type(archive)
+    original_getitem = archive_type.__getitem__
+    materialized_keys = []
+
+    def checked_getitem(archive, key):
+        materialized_keys.append(key)
+        return original_getitem(archive, key)
+
+    monkeypatch.setattr(archive_type, "__getitem__", checked_getitem)
+
+    actual = load_sequence_embedding_file(path)
+
+    np.testing.assert_array_equal(actual["sequence"], expected)
+    assert actual["sequence"].dtype == np.float32
+    np.testing.assert_array_equal(actual["sequence_mask"], [True, True, True])
+    assert materialized_keys == ["sequence"]
+
+
+def test_npz_sidecar_prefers_exact_name_before_later_npy_alias(tmp_path):
+    # Synthetic embeddings distinguish exact-name preference from ZIP order.
+    path = tmp_path / "embedding.npz"
+    sequence = np.arange(12, dtype=np.float64).reshape(3, 4)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("sequence", _npy_bytes(sequence))
+        archive.writestr("sequence.npy", _npy_bytes(np.full((3, 4), 500.0)))
+
+    actual = load_sequence_embedding_file(path)
+
+    np.testing.assert_array_equal(actual["sequence"], sequence)
+
+
+@pytest.mark.parametrize("collision", _NPZ_MEMBER_COLLISIONS)
+@pytest.mark.parametrize("invalid_kind", ["object", "header"])
+def test_npz_sidecars_reject_shadowed_invalid_npy_without_unpickling(
+    tmp_path, monkeypatch, collision, invalid_kind
+):
+    path = tmp_path / "embedding.npz"
+    shadowed_content = (
+        _npy_bytes(np.array([object()], dtype=object))
+        if invalid_kind == "object"
+        else np.lib.format.magic(1, 0) + b"\xff\xffinvalid header"
+    )
+    _write_shadowed_npz(path, collision, shadowed_content)
+
+    def unexpected_unpickle(*args, **kwargs):
+        pytest.fail("Shadowed object arrays must be rejected before unpickling")
+
+    monkeypatch.setattr(pickle, "load", unexpected_unpickle)
+    monkeypatch.setattr(pickle, "loads", unexpected_unpickle)
+    message = "Object arrays cannot be loaded" if invalid_kind == "object" else None
+    with pytest.raises(ValueError, match=message):
+        load_sequence_embedding_file(path)
+
+
+@pytest.mark.parametrize("collision", _NPZ_MEMBER_COLLISIONS)
+def test_npz_sidecars_reject_shadowed_physical_member_crc_corruption(
+    tmp_path, collision
+):
+    path = tmp_path / "embedding.npz"
+    _, member = _write_shadowed_npz(
+        path, collision, _npy_bytes(np.arange(32 * 1024, dtype=np.float64))
+    )
+    content = bytearray(path.read_bytes())
+    filename_size = int.from_bytes(
+        content[member.header_offset + 26 : member.header_offset + 28], "little"
+    )
+    extra_size = int.from_bytes(
+        content[member.header_offset + 28 : member.header_offset + 30], "little"
+    )
+    payload_offset = member.header_offset + 30 + filename_size + extra_size
+    content[payload_offset + member.file_size - 1] ^= 1
+    path.write_bytes(content)
+
+    with pytest.raises(zipfile.BadZipFile, match="CRC"):
+        load_sequence_embedding_file(path)

@@ -47,15 +47,24 @@ def _read_npz_payload(sequence_embedding_path: Path) -> dict[str, object]:
     supported_keys = {"sequence", "sequence_mask", "unified_seq", "unified_seq_len"}
     payload = {}
     with np.load(sequence_embedding_path, allow_pickle=False) as npz_file:
-        member_names = set(npz_file.zip.namelist())
-        for key in npz_file.files:
-            if key in supported_keys:
+        members = npz_file.zip.infolist()
+        members_by_name = {member.filename: member for member in members}
+        supported_members = {}
+        for key in supported_keys:
+            # Preserve NumPy's exact-name preference and ZIP's last-duplicate
+            # selection, while identifying the actual member that is loaded.
+            member_name = key if key in members_by_name else f"{key}.npy"
+            if member_name in members_by_name:
+                supported_members[members_by_name[member_name]] = key
+        for member_info in members:
+            key = supported_members.get(member_info)
+            if key is not None:
                 payload[key] = npz_file[key]
             else:
-                # Match NpzFile's preference for an exact member name before
-                # trying its .npy alias, including archives with raw extras.
-                member_name = key if key in member_names else f"{key}.npy"
-                with npz_file.zip.open(member_name) as member:
+                # Open each ignored physical entry, including members hidden
+                # by aliases or duplicate filenames, rather than resolving its
+                # name again and accidentally rereading the selected member.
+                with npz_file.zip.open(member_info) as member:
                     _validate_ignored_npz_member(member, npz_file.max_header_size)
     return payload
 
