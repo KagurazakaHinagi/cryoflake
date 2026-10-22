@@ -15,18 +15,23 @@ import numpy as np
 import pytest
 from dotenv import dotenv_values
 from omegaconf import OmegaConf
+from standard_target import standard_expected
 
 from cryoflake.manifests.manifest import read_artifact_list, read_manifest_csv
 from cryoflake.preprocess import manifest as preprocessing_manifest
+from cryoflake.preprocess import worker as preprocessing_worker
 from cryoflake.preprocess.checkpoint import (
     CheckpointContractMismatchError,
     PreprocessCheckpoint,
 )
+from cryoflake.preprocess.memory_guard import PreprocessMemoryAdmission
 from cryoflake.storage.artifacts import validate_preprocessed_artifact
 from cryoflake.storage.store import load_preprocessed_artifact
 
 from . import conftest as documentation_fixtures
 from .examples import get_example
+
+EXPECTED = standard_expected()
 
 pytestmark = pytest.mark.documentation
 
@@ -55,7 +60,10 @@ def _assert_complete_batch(workspace, *, remote: bool = False) -> list[Path | st
     assert all(row["status"] in {"processed", "reused"} for row in rows)
     assert all(row["cached_artifact_dir"] == "" for row in rows)
     assert [float(row["source_resolution"]) for row in rows] == [3.2, 2.8]
-    assert all(float(row["input_voxel_size"]) == 1.0 for row in rows)
+    assert all(
+        np.isclose(float(row["input_voxel_size"]), EXPECTED["voxel_size"])
+        for row in rows
+    )
     assert all(float(row["artifact_voxel_size"]) > 0 for row in rows)
     summary_references = {
         row["artifact_reference"]
@@ -66,9 +74,10 @@ def _assert_complete_batch(workspace, *, remote: bool = False) -> list[Path | st
     assert summary_references == set(map(str, paths))
     for path in paths:
         result = validate_preprocessed_artifact(path)
-        assert result.protein_nodes > 0
-        assert result.component_nodes > 0
-        assert all(size > 0 for size in result.grid_shape)
+        assert result.protein_nodes == EXPECTED["protein_nodes"]
+        assert result.nucleotide_nodes == EXPECTED["nucleotide_nodes"]
+        assert result.component_nodes == EXPECTED["component_nodes"]
+        assert result.grid_shape == EXPECTED["grid_shape"]
         if remote:
             assert str(path).startswith("s3://my-bucket/artifacts/")
         else:
@@ -219,10 +228,23 @@ def test_single_example_runs_adapter_and_validates_actual_artifact(doc_workspace
     result = json.loads(results[-1].output)
     actual = validate_preprocessed_artifact(artifact)
     assert result["grid_shape"] == list(actual.grid_shape)
-    assert result["protein_nodes"] == actual.protein_nodes == 1
-    assert result["nucleotide_nodes"] == actual.nucleotide_nodes == 1
-    assert result["component_nodes"] == actual.component_nodes == 1
-    assert load_preprocessed_artifact(artifact)["voxel_size"] == 1.5
+    assert actual.grid_shape == EXPECTED["grid_shape"]
+    assert result["protein_nodes"] == actual.protein_nodes == EXPECTED["protein_nodes"]
+    assert (
+        result["nucleotide_nodes"]
+        == actual.nucleotide_nodes
+        == EXPECTED["nucleotide_nodes"]
+    )
+    assert (
+        result["component_nodes"]
+        == actual.component_nodes
+        == EXPECTED["component_nodes"]
+    )
+    # The injected adapter records requests while preserving the real compact
+    # fixture's sampling; interpolation primitives are tested independently.
+    assert np.isclose(
+        load_preprocessed_artifact(artifact)["voxel_size"], EXPECTED["voxel_size"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -330,6 +352,61 @@ def test_cli_batch_example_produces_two_successful_training_artifacts(
             pass
 
 
+def test_batch_example_uses_compact_fixture_with_a_512_mib_memory_guard(
+    doc_workspace, monkeypatch
+):
+    budget = 512 * 1024**2
+    admissions = []
+    estimates = []
+    estimate_workload = preprocessing_worker.estimate_preprocess_memory_or_none
+
+    class TrackingAdmission(PreprocessMemoryAdmission):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.acquisitions = []
+            self.releases = []
+            admissions.append(self)
+
+        def acquire(self, requested_bytes):
+            super().acquire(requested_bytes)
+            self.acquisitions.append(requested_bytes)
+
+        def release(self, requested_bytes):
+            super().release(requested_bytes)
+            self.releases.append(requested_bytes)
+
+    def record_estimate(map_path, target_voxel_size):
+        estimate = estimate_workload(map_path, target_voxel_size)
+        estimates.append(estimate)
+        return estimate
+
+    monkeypatch.setattr(
+        preprocessing_manifest, "preprocess_memory_guard_limit_bytes", lambda: budget
+    )
+    monkeypatch.setattr(
+        preprocessing_manifest, "PreprocessMemoryAdmission", TrackingAdmission
+    )
+    monkeypatch.setattr(
+        preprocessing_worker, "estimate_preprocess_memory_or_none", record_estimate
+    )
+
+    doc_workspace.invoke(_batch_command())
+
+    _assert_complete_batch(doc_workspace)
+    assert [row["status"] for row in _summary(doc_workspace.root)] == ["processed"] * 2
+    assert len(doc_workspace.adapter_calls) == len(estimates) == 2
+    assert all(call["target_voxel_size"] == 1.0 for call in doc_workspace.adapter_calls)
+    for estimate in estimates:
+        assert estimate is not None
+        assert estimate.input_shape == EXPECTED["grid_shape"]
+        assert 0 < estimate.estimated_peak_bytes < budget
+    (admission,) = admissions
+    assert admission.limit_bytes == budget
+    assert admission.reserved_bytes == 0
+    assert len(admission.acquisitions) == len(admission.releases) == 2
+    assert sorted(admission.acquisitions) == sorted(admission.releases)
+
+
 def test_python_batch_example_uses_manifest_relative_input_paths(doc_workspace):
     doc_workspace.prepare_manifest()
     namespace = get_example("guide-batch-python").execute()
@@ -395,6 +472,7 @@ def test_split_options_produce_disjoint_nonempty_datasets(
 ):
     options = _options("guide-split-options")
     if split_strategy == "component":
+        doc_workspace.use_independent_component_groups()
         options += _options("guide-group-options")
     doc_workspace.invoke(_batch_command() + options)
     train = set(map(str, read_artifact_list(doc_workspace.root / "data/train.txt")))
@@ -422,6 +500,7 @@ def test_split_options_produce_disjoint_nonempty_datasets(
 
 
 def test_replay_options_preserve_report_selection_and_assignments(doc_workspace):
+    doc_workspace.use_independent_component_groups()
     doc_workspace.invoke(
         _batch_command()
         + _options("guide-split-options")
@@ -465,7 +544,9 @@ def test_validation_examples_check_real_local_and_remote_training_artifacts(
 ):
     doc_workspace.seed_training("data/artifacts/example")
     doc_workspace.seed_training("data/artifacts/emd_1001_1abc")
-    doc_workspace.seed_training("s3://my-bucket/artifacts/example")
+    doc_workspace.seed_training(
+        "s3://my-bucket/artifacts/example", include_sequence=True
+    )
     validations = []
     for command in get_example(example_id).commands():
         result = doc_workspace.invoke(command)

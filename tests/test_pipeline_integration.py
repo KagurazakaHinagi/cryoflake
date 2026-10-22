@@ -11,13 +11,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
-from cryoflake.constants import (
-    FULL_ATOM_COUNT,
-    FULL_ATOM_TARGET_SCHEMA_VERSION,
-    RIGID_GROUP_COUNT,
-    TORSION_COUNT,
+from standard_target import (
+    load_standard_artifact_mapping,
+    load_standard_full_atom_targets,
+    standard_expected,
+    write_standard_structure,
 )
+
 from cryoflake.io.mrc import load_mrc, save_mrc
 from cryoflake.io.structure import load_full_backbone_from_structure
 from cryoflake.manifests.manifest import read_artifact_list
@@ -33,113 +33,35 @@ from cryoflake.storage.store import (
     write_preprocessed_artifact,
 )
 from cryoflake.targets.components import build_component_extension_targets
-from cryoflake.targets.full_atom import validate_full_atom_targets
-
-_MIXED_CIF = """data_pipeline
-loop_
-_entity.id
-_entity.type
-1 polymer
-2 polymer
-3 non-polymer
-loop_
-_entity_poly.entity_id
-_entity_poly.type
-1 polypeptide(L)
-2 polydeoxyribonucleotide
-loop_
-_chem_comp.id
-_chem_comp.type
-ALA 'L-PEPTIDE LINKING'
-DA 'DNA LINKING'
-LIG 'NON-POLYMER'
-loop_
-_atom_site.group_PDB
-_atom_site.label_atom_id
-_atom_site.label_alt_id
-_atom_site.label_comp_id
-_atom_site.label_asym_id
-_atom_site.label_entity_id
-_atom_site.label_seq_id
-_atom_site.auth_asym_id
-_atom_site.auth_seq_id
-_atom_site.pdbx_PDB_ins_code
-_atom_site.pdbx_PDB_model_num
-_atom_site.type_symbol
-_atom_site.occupancy
-_atom_site.B_iso_or_equiv
-_atom_site.Cartn_x
-_atom_site.Cartn_y
-_atom_site.Cartn_z
-ATOM N . ALA A 1 1 A 10 ? 1 N 1.0 20.0 1.0 0.0 1.0
-ATOM CA . ALA A 1 1 A 10 ? 1 C 1.0 20.0 1.0 1.0 1.0
-ATOM C . ALA A 1 1 A 10 ? 1 C 1.0 20.0 2.0 1.0 1.0
-ATOM O . ALA A 1 1 A 10 ? 1 O 1.0 20.0 2.0 2.0 1.0
-ATOM P . DA B 2 1 B 20 ? 1 P 1.0 20.0 2.0 2.0 2.0
-HETATM C1 . LIG C 3 . C 30 ? 1 C 1.0 20.0 1.5 1.0 1.0
-HETATM O1 . LIG C 3 . C 30 ? 1 O 1.0 20.0 1.5 2.0 1.0
-"""
-
-
-def _full_atom_fixture():
-    """Two canonical nodes with unavailable geometry explicitly masked."""
-    targets = {
-        "schema_version": FULL_ATOM_TARGET_SCHEMA_VERSION,
-        "aatype": np.asarray([0, 24], dtype=np.int64),
-        "chain_index": np.asarray([0, 1], dtype=np.int64),
-        "residue_index": np.asarray([10, 20], dtype=np.int64),
-        "atom_names": np.asarray([f"C{slot}" for slot in range(FULL_ATOM_COUNT)]),
-    }
-    shapes = {
-        "atom_positions": (FULL_ATOM_COUNT, 3),
-        "atom_mask": (FULL_ATOM_COUNT,),
-        "b_factors": (FULL_ATOM_COUNT,),
-        "rigidgroups_gt_frames": (RIGID_GROUP_COUNT, 3, 4),
-        "rigidgroups_gt_exists": (RIGID_GROUP_COUNT,),
-        "rigidgroups_group_exists": (RIGID_GROUP_COUNT,),
-        "rigidgroups_group_is_ambiguous": (RIGID_GROUP_COUNT,),
-        "rigidgroups_alt_gt_frames": (RIGID_GROUP_COUNT, 3, 4),
-        "torsion_angles_sin_cos": (TORSION_COUNT, 2),
-        "alt_torsion_angles_sin_cos": (TORSION_COUNT, 2),
-        "torsion_angles_mask": (TORSION_COUNT,),
-    }
-    targets.update(
-        {
-            name: np.zeros((2, *shape), dtype=np.float32)
-            for name, shape in shapes.items()
-        }
-    )
-    return validate_full_atom_targets(targets, num_protein=1, num_nucleotide=1)
 
 
 @pytest.mark.parametrize("vector_fields", [("CA",), ("P",), ("CA", "P")])
 def test_artifact_validation_counts_normalized_single_coordinates(
     tmp_path, vector_fields
 ):
-    structure = tmp_path / "structure.cif"
-    structure.write_text(_MIXED_CIF)
-    grid = np.ones((4, 4, 4), dtype=np.float32)
-    origin = np.zeros(3, dtype=np.float32)
+    payload = load_standard_artifact_mapping()
+    targets = payload["full_atom_targets"]
+    protein_count = len(payload["backbone_coordinates"]["CA"])
+    selected_rows = [0, protein_count]
+    payload["full_atom_targets"] = {
+        key: value[selected_rows]
+        if isinstance(value, np.ndarray) and key != "atom_names"
+        else value
+        for key, value in targets.items()
+    }
     coordinates = {
-        name: np.ones((1, 3), dtype=np.float32) for name in ("CA", "C", "N", "O", "P")
+        name: values[:1].copy()
+        for name, values in payload["backbone_coordinates"].items()
+    }
+    payload["backbone_coordinates"] = coordinates
+    payload["residue_info"] = {
+        "aa_type": payload["residue_info"]["aa_type"][:1],
+        "nuc_type": payload["residue_info"]["nuc_type"][:1],
     }
     for name in vector_fields:
         coordinates[name] = coordinates[name].reshape(3)
     root = tmp_path / "artifact"
-    write_preprocessed_artifact(
-        root,
-        {
-            "density_grid": grid,
-            "global_origin": origin,
-            "voxel_size": 1.0,
-            "backbone_coordinates": coordinates,
-            "residue_info": {"aa_type": ["ALA"], "nuc_type": ["DA"]},
-            "full_atom_targets": _full_atom_fixture(),
-            "extension_targets": build_component_extension_targets(
-                structure, global_origin=origin, voxel_size=1.0, grid_shape=grid.shape
-            ),
-        },
-    )
+    write_preprocessed_artifact(root, payload)
 
     result = validate_preprocessed_artifact(root)
 
@@ -147,12 +69,16 @@ def test_artifact_validation_counts_normalized_single_coordinates(
     restored_targets = load_preprocessed_artifact(root)["full_atom_targets"]
     assert restored_targets["atom_names"].shape == (65,)
     assert restored_targets["atom_names"].dtype.kind == "U"
-    assert restored_targets["atom_names"].tolist() == [f"C{slot}" for slot in range(65)]
-    assert not restored_targets["atom_mask"].any()
+    np.testing.assert_array_equal(restored_targets["atom_names"], targets["atom_names"])
+    assert restored_targets["atom_mask"].any()
 
 
-class _CPUAdapter:
-    """A real NumPy/Biotite adapter with one intentional transient interruption."""
+class _StandardTargetAdapter:
+    """Round-trip the canonical real fixture with one controlled interruption.
+
+    Map resampling is tested separately; this injected adapter preserves the
+    fixture's actual spacing and only validates the requested spacing value.
+    """
 
     def __init__(self):
         self.calls = []
@@ -174,23 +100,27 @@ class _CPUAdapter:
         assert Path(map_path).suffix == ".mrc"
         assert Path(structure_path).suffix in {".cif", ".mmcif"}
         assert original_structure_path is None and fasta_path is None and fix_shift
-        if Path(structure_path).name == "2abc.mmcif" and not self.interrupted:
+        if Path(structure_path).name == "9tst.mmcif" and not self.interrupted:
             self.interrupted = True
             raise RuntimeError("intentional adapter interruption")
 
         volume = load_mrc(map_path)
-        assert volume.voxel_size == target_voxel_size == 1
+        assert target_voxel_size > 0
+        assert np.isclose(volume.voxel_size, standard_expected()["voxel_size"])
         coordinates, residue_info = load_full_backbone_from_structure(structure_path)
-        full_atom_targets = _full_atom_fixture()
+        full_atom_targets = load_standard_full_atom_targets()
         extension_targets = build_component_extension_targets(
             structure_path,
             global_origin=volume.global_origin,
             voxel_size=volume.voxel_size,
             grid_shape=volume.grid.shape,
-            polymer_atom_positions=np.concatenate(
-                (coordinates["CA"], coordinates["P"])
-            ),
-            polymer_atom_node_indices=np.arange(2, dtype=np.int64),
+            polymer_atom_positions=full_atom_targets["atom_positions"][
+                full_atom_targets["atom_mask"]
+            ],
+            polymer_atom_node_indices=np.broadcast_to(
+                np.arange(len(full_atom_targets["aatype"]))[:, None],
+                full_atom_targets["atom_mask"].shape,
+            )[full_atom_targets["atom_mask"]],
             polymer_chain_indices=full_atom_targets["chain_index"],
             polymer_residue_indices=full_atom_targets["residue_index"],
             polymer_aatype=full_atom_targets["aatype"],
@@ -211,27 +141,39 @@ class _CPUAdapter:
 
 
 def _compressed_inputs(tmp_path):
-    grid = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+    payload = load_standard_artifact_mapping()
+    grid = payload["density_grid"]
     raw_map = tmp_path / "density.mrc"
-    save_mrc(grid, 1, np.zeros(3), raw_map)
+    save_mrc(grid, payload["voxel_size"], payload["global_origin"], raw_map)
     compressed_map = tmp_path / "density.mrc.gz"
     compressed_map.write_bytes(gzip.compress(raw_map.read_bytes()))
     raw_map.unlink()
-    for name in ("1abc.cif.gz", "2abc.mmcif.gz"):
-        (tmp_path / name).write_bytes(gzip.compress(_MIXED_CIF.encode()))
-    sequence = np.arange(8, dtype=np.float32).reshape(2, 4)
+    structure_path = write_standard_structure(tmp_path / "standard.cif")
+    # The second routing record is an explicit test duplicate of 7AE1, used to
+    # exercise interruption/recovery. 90001/9tst is not another biological entry.
+    for name in ("7ae1.cif.gz", "9tst.mmcif.gz"):
+        (tmp_path / name).write_bytes(gzip.compress(structure_path.read_bytes()))
+    protein_count = len(payload["backbone_coordinates"]["CA"])
+    ca_slot = payload["full_atom_targets"]["atom_names"].tolist().index("CA")
+    # Geometry-derived numeric test features stand in for a sequence model;
+    # no language-model output is claimed by these storage/attachment checks.
+    sequence = np.column_stack(
+        (
+            payload["backbone_coordinates"]["CA"],
+            payload["full_atom_targets"]["b_factors"][:protein_count, ca_slot],
+        )
+    ).astype(np.float32)
     np.savez_compressed(
         tmp_path / "sequence.npz",
         sequence=sequence,
-        sequence_mask=np.asarray([True, False]),
-        unified_seq=np.asarray("A|||A"),
-        unified_seq_len=np.asarray(2),
+        sequence_mask=np.arange(protein_count) % 2 == 0,
+        unified_seq_len=np.asarray(protein_count),
     )
     manifest = tmp_path / "manifest.csv"
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path,sequence_embedding_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz,sequence.npz\n"
-        "1002,2abc,density.mrc.gz,2abc.mmcif.gz,sequence.npz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz,sequence.npz\n"
+        "90001,9tst,density.mrc.gz,9tst.mmcif.gz,sequence.npz\n"
     )
     return manifest, grid, sequence
 
@@ -240,13 +182,14 @@ def test_reused_artifact_is_loaded_once_per_manifest_row(monkeypatch, tmp_path):
     manifest, _, _ = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
     )
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     arguments = dict(
         manifest_csv=manifest,
         artifact_output_dir=tmp_path / "artifacts",
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         continue_on_preprocess_error=False,
     )
     artifact = preprocess_manifest_csv(**arguments)[0]
@@ -261,7 +204,31 @@ def test_reused_artifact_is_loaded_once_per_manifest_row(monkeypatch, tmp_path):
 
     assert preprocess_manifest_csv(**arguments) == [artifact]
     assert loaded_paths == [artifact]
-    assert adapter.calls == ["1abc.cif"]
+    assert adapter.calls == ["7ae1.cif"]
+
+
+def test_standard_pipeline_fits_compact_fixture_memory_budget(monkeypatch, tmp_path):
+    """The real coarse map must not imply an unperformed fine-grid resampling."""
+    manifest, _, _ = _compressed_inputs(tmp_path)
+    manifest.write_text(
+        "emdb_id,wwpdb_id,map_path,structure_path\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
+    )
+    monkeypatch.setattr(
+        "cryoflake.preprocess.manifest.preprocess_memory_guard_limit_bytes",
+        lambda: 512 * 1024**2,
+    )
+    references = preprocess_manifest_csv(
+        manifest,
+        tmp_path / "artifacts",
+        preprocess_adapter=_StandardTargetAdapter(),
+        target_voxel_size=standard_expected()["voxel_size"],
+        continue_on_preprocess_error=False,
+    )
+    assert len(references) == 1
+    result = validate_preprocessed_artifact(references[0])
+    assert result.grid_shape == standard_expected()["grid_shape"]
+    assert result.protein_nodes == standard_expected()["protein_nodes"]
 
 
 def test_reuse_releases_rejected_payload_before_loading_next_candidate(
@@ -286,12 +253,12 @@ def test_reuse_releases_rejected_payload_before_loading_next_candidate(
         lambda payload, **kwargs: payload["valid"],
     )
     matched = reuse._find_reusable_preprocessed_artifact(
-        {"emdb_id": "1001", "wwpdb_id": "1abc"},
+        {"emdb_id": "11736", "wwpdb_id": "7ae1"},
         target,
         [tmp_path / "reusable"],
     )
     assert loads == 2
-    assert matched[0] == tmp_path / "reusable" / "emd_1001_1abc"
+    assert matched[0] == tmp_path / "reusable" / "emd_11736_7ae1"
     assert matched[1]["density_grid"] is previous_grid()
 
 
@@ -301,7 +268,7 @@ def test_compressed_manifest_pipeline_validates_resumes_and_reuses(tmp_path):
     dataset_list = tmp_path / "dataset.txt"
     summary = tmp_path / "summary.csv"
     journal = Path(f"{summary}.checkpoint.jsonl")
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     progress = []
     arguments = dict(
         manifest_csv=manifest,
@@ -309,52 +276,54 @@ def test_compressed_manifest_pipeline_validates_resumes_and_reuses(tmp_path):
         artifact_list_path=dataset_list,
         summary_csv=summary,
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         # The callable tracks execution counts, rather than configuration state.
         preprocess_checkpoint_token="cpu-integration-v1",
         require_sequence_embeddings=True,
         continue_on_preprocess_error=False,
         progress_callback=progress.append,
     )
-    first_artifact = output_dir / "emd_1001_1abc"
+    first_artifact = output_dir / "emd_11736_7ae1"
     with pytest.raises(RuntimeError, match="intentional adapter interruption"):
         preprocess_manifest_csv(**arguments)
-    assert adapter.calls == ["1abc.cif", "2abc.mmcif"]
+    assert adapter.calls == ["7ae1.cif", "9tst.mmcif"]
     assert journal.is_file()
-    assert (
-        validate_preprocessed_artifact(
-            first_artifact, require_sequence_embeddings=True
-        ).sequence_length
-        == 2
-    )
+    assert validate_preprocessed_artifact(
+        first_artifact, require_sequence_embeddings=True
+    ).sequence_length == len(sequence)
     first_core_hash = hashlib.sha256(
         (first_artifact / "core.npz").read_bytes()
     ).digest()
 
     paths = preprocess_manifest_csv(**arguments)
-    assert adapter.calls == ["1abc.cif", "2abc.mmcif", "2abc.mmcif"]
+    assert adapter.calls == ["7ae1.cif", "9tst.mmcif", "9tst.mmcif"]
     assert any(message.startswith("Resuming 1/2 rows") for message in progress)
-    assert paths == [first_artifact, output_dir / "emd_1002_2abc"]
+    assert paths == [first_artifact, output_dir / "emd_90001_9tst"]
     assert not journal.exists()
     results = validate_artifact_list(dataset_list, require_sequence_embeddings=True)
     assert len(results) == 2
     for artifact, result in zip(paths, results):
-        assert result.grid_shape == (4, 4, 4)
+        assert result.grid_shape == tuple(standard_expected()["grid_shape"])
+        assert result.protein_nodes == standard_expected()["protein_nodes"]
+        assert result.nucleotide_nodes == standard_expected()["nucleotide_nodes"]
+        assert result.component_nodes == standard_expected()["component_nodes"]
         assert (
-            result.protein_nodes
-            == result.nucleotide_nodes
-            == result.component_nodes
-            == 1
+            result.sequence_length == len(sequence) and result.sequence_feature_dim == 4
         )
-        assert result.sequence_length == 2 and result.sequence_feature_dim == 4
         loaded = load_preprocessed_artifact(artifact)
         np.testing.assert_array_equal(loaded["sequence"], sequence)
-        np.testing.assert_array_equal(loaded["sequence_mask"], [True, False])
-        np.testing.assert_array_equal(loaded["backbone_coordinates"]["CA"], [[1, 1, 1]])
-        assert loaded["extension_targets"]["component"]["component_id"].tolist() == [
-            "LIG"
-        ]
+        np.testing.assert_array_equal(
+            loaded["sequence_mask"], np.arange(len(sequence)) % 2 == 0
+        )
+        np.testing.assert_array_equal(
+            loaded["backbone_coordinates"]["CA"],
+            load_standard_artifact_mapping()["backbone_coordinates"]["CA"],
+        )
+        assert sorted(
+            set(loaded["extension_targets"]["component"]["component_id"])
+        ) == ["MG", "SF4", "ZN"]
         component = loaded["extension_targets"]["component"]
-        assert (component["interface_group_id"] != "").tolist() == [True]
+        assert (component["interface_group_id"] != "").all()
         assert "prot_mask" not in loaded["full_atom_targets"]
         assert not {"atom_mask", "interface_mask", "split_groups"}.intersection(
             component
@@ -392,11 +361,14 @@ def test_recovered_grouped_split_report_replays_with_canonical_references(
     tmp_path, split_strategy
 ):
     manifest, _, _ = _compressed_inputs(tmp_path)
-    # Independent ligand/interface groups permit a nonempty grouped split.
-    (tmp_path / "2abc.mmcif.gz").write_bytes(
-        gzip.compress(_MIXED_CIF.replace("LIG", "ATP").encode())
-    )
-    adapter = _CPUAdapter()
+    # Deliberate component subsets of the same deposition provide disjoint
+    # groups for this algorithm test; no fictitious ligand chemistry is added.
+    for name, component_ids in (("7ae1.cif.gz", ["ZN"]), ("9tst.mmcif.gz", ["SF4"])):
+        structure_path = write_standard_structure(
+            tmp_path / "selected.cif", component_ids=component_ids
+        )
+        (tmp_path / name).write_bytes(gzip.compress(structure_path.read_bytes()))
+    adapter = _StandardTargetAdapter()
     summary = tmp_path / "summary.csv"
     train_list = tmp_path / "train.txt"
     validation_list = tmp_path / "valid.txt"
@@ -411,6 +383,7 @@ def test_recovered_grouped_split_report_replays_with_canonical_references(
         split_strategy=split_strategy,
         split_report_path=report,
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         preprocess_checkpoint_token="grouped-naming-integration-v1",
         require_sequence_embeddings=True,
         continue_on_preprocess_error=False,
@@ -432,7 +405,7 @@ def test_recovered_grouped_split_report_replays_with_canonical_references(
 
     references = preprocess_manifest_csv(**arguments)
 
-    assert adapter.calls == ["1abc.cif", "2abc.mmcif", "2abc.mmcif"]
+    assert adapter.calls == ["7ae1.cif", "9tst.mmcif", "9tst.mmcif"]
     assert not journal.exists()
     assert first_core.read_bytes() == first_core_bytes
     original = json.loads(report.read_text())
@@ -473,9 +446,9 @@ def test_manifest_ignores_pickle_files_and_reuses_npz_json_artifacts(
     manifest, grid, _ = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
     )
-    artifact_name = "emd_1001_1abc"
+    artifact_name = "emd_11736_7ae1"
     reuse_dir = tmp_path / "reuse"
     reuse_dir.mkdir()
     for suffix in (".pkl", ".pickle"):
@@ -491,7 +464,7 @@ def test_manifest_ignores_pickle_files_and_reuses_npz_json_artifacts(
         return original_open(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "open", record_open)
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     output_dir = tmp_path / "artifacts"
     summary = tmp_path / "summary.csv"
     paths = preprocess_manifest_csv(
@@ -499,13 +472,14 @@ def test_manifest_ignores_pickle_files_and_reuses_npz_json_artifacts(
         output_dir,
         artifact_reuse_dirs=[reuse_dir],
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         summary_csv=summary,
         continue_on_preprocess_error=False,
     )
 
     artifact = output_dir / artifact_name
     assert paths == [artifact]
-    assert adapter.calls == ["1abc.cif"]
+    assert adapter.calls == ["7ae1.cif"]
     assert opened_single_files == []
     assert {path.name for path in artifact.iterdir()} == {
         "core.npz",
@@ -524,10 +498,11 @@ def test_manifest_ignores_pickle_files_and_reuses_npz_json_artifacts(
         tmp_path / "other_artifacts",
         artifact_reuse_dirs=[reuse_dir, output_dir],
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         summary_csv=summary,
         continue_on_preprocess_error=False,
     ) == [artifact]
-    assert adapter.calls == ["1abc.cif"]
+    assert adapter.calls == ["7ae1.cif"]
     assert opened_single_files == []
     with summary.open(newline="") as stream:
         assert list(csv.DictReader(stream))[0]["status"] == "reused_external"
@@ -537,15 +512,16 @@ def test_required_sidecar_enriches_reused_target_without_preprocessing(tmp_path)
     manifest, _, sequence = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
     )
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     output_dir = tmp_path / "artifacts"
     summary = tmp_path / "summary.csv"
     arguments = dict(
         manifest_csv=manifest,
         artifact_output_dir=output_dir,
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         summary_csv=summary,
         continue_on_preprocess_error=False,
     )
@@ -555,23 +531,20 @@ def test_required_sidecar_enriches_reused_target_without_preprocessing(tmp_path)
 
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path,sequence_embedding_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz,sequence.npz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz,sequence.npz\n"
     )
     assert preprocess_manifest_csv(**arguments, require_sequence_embeddings=True) == [
         artifact
     ]
 
-    assert adapter.calls == ["1abc.cif"]
+    assert adapter.calls == ["7ae1.cif"]
     assert (artifact / "core.npz").read_bytes() == core_before
     np.testing.assert_array_equal(
         load_preprocessed_artifact(artifact)["sequence"], sequence
     )
-    assert (
-        validate_preprocessed_artifact(
-            artifact, require_sequence_embeddings=True
-        ).sequence_length
-        == 2
-    )
+    assert validate_preprocessed_artifact(
+        artifact, require_sequence_embeddings=True
+    ).sequence_length == len(sequence)
     with summary.open(newline="") as stream:
         assert list(csv.DictReader(stream))[0]["status"] == "reused"
 
@@ -581,13 +554,14 @@ def test_reuse_rebuilds_artifact_with_unreadable_optional_sequence(tmp_path, dam
     manifest, _, _ = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path,sequence_embedding_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz,sequence.npz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz,sequence.npz\n"
     )
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     arguments = dict(
         manifest_csv=manifest,
         artifact_output_dir=tmp_path / "artifacts",
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         continue_on_preprocess_error=False,
     )
     artifact = preprocess_manifest_csv(**arguments)[0]
@@ -598,12 +572,12 @@ def test_reuse_rebuilds_artifact_with_unreadable_optional_sequence(tmp_path, dam
         sequence_store.write_bytes(b"broken archive")
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
     )
 
     assert preprocess_manifest_csv(**arguments) == [artifact]
 
-    assert adapter.calls == ["1abc.cif", "1abc.cif"]
+    assert adapter.calls == ["7ae1.cif", "7ae1.cif"]
     assert "sequence" not in load_preprocessed_artifact(artifact)
     assert validate_preprocessed_artifact(artifact).sequence_length is None
 
@@ -614,13 +588,14 @@ def test_reuse_repairs_corrupt_sequence_from_replacement_without_reprocessing(
     manifest, _, sequence = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path,sequence_embedding_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz,sequence.npz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz,sequence.npz\n"
     )
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     arguments = dict(
         manifest_csv=manifest,
         artifact_output_dir=tmp_path / "artifacts",
         preprocess_adapter=adapter,
+        target_voxel_size=standard_expected()["voxel_size"],
         continue_on_preprocess_error=False,
         require_sequence_embeddings=True,
     )
@@ -630,7 +605,7 @@ def test_reuse_repairs_corrupt_sequence_from_replacement_without_reprocessing(
 
     assert preprocess_manifest_csv(**arguments) == [artifact]
 
-    assert adapter.calls == ["1abc.cif"]
+    assert adapter.calls == ["7ae1.cif"]
     assert (artifact / "core.npz").read_bytes() == core_before
     np.testing.assert_array_equal(
         load_preprocessed_artifact(artifact)["sequence"], sequence
@@ -651,12 +626,13 @@ def test_reuse_rejects_present_invalid_optional_sequence(
     manifest, _, _ = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
     )
     artifact = preprocess_manifest_csv(
         manifest,
         tmp_path / "artifacts",
-        preprocess_adapter=_CPUAdapter(),
+        preprocess_adapter=_StandardTargetAdapter(),
+        target_voxel_size=standard_expected()["voxel_size"],
         continue_on_preprocess_error=False,
     )[0]
     payload = load_preprocessed_artifact(artifact)
@@ -679,9 +655,9 @@ def test_manifest_rejects_adapter_outputs_that_violate_training_contract(
     manifest, _, _ = _compressed_inputs(tmp_path)
     manifest.write_text(
         "emdb_id,wwpdb_id,map_path,structure_path\n"
-        "1001,1abc,density.mrc.gz,1abc.cif.gz\n"
+        "11736,7ae1,density.mrc.gz,7ae1.cif.gz\n"
     )
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
 
     def invalid_adapter(**kwargs):
         adapter(**kwargs)
@@ -699,6 +675,7 @@ def test_manifest_rejects_adapter_outputs_that_violate_training_contract(
             manifest,
             tmp_path / "artifacts",
             preprocess_adapter=invalid_adapter,
+            target_voxel_size=standard_expected()["voxel_size"],
             continue_on_preprocess_error=False,
         )
 
@@ -714,10 +691,10 @@ def test_cli_preprocess_validates_real_adapter_output(monkeypatch, tmp_path):
     _compressed_inputs(tmp_path)
     raw_map = tmp_path / "density.mrc"
     raw_map.write_bytes(gzip.decompress((tmp_path / "density.mrc.gz").read_bytes()))
-    raw_structure = tmp_path / "1abc.cif"
-    raw_structure.write_text(_MIXED_CIF)
+    raw_structure = tmp_path / "7ae1.cif"
+    write_standard_structure(raw_structure)
     output = tmp_path / "artifact"
-    adapter = _CPUAdapter()
+    adapter = _StandardTargetAdapter()
     module = ModuleType("_cryoflake_cli_integration_adapter")
 
     def preprocess(**kwargs):
@@ -738,6 +715,7 @@ def test_cli_preprocess_validates_real_adapter_output(monkeypatch, tmp_path):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert adapter.calls == ["1abc.cif"]
+    assert adapter.calls == ["7ae1.cif"]
     validated = validate_preprocessed_artifact(output)
-    assert validated.protein_nodes == validated.nucleotide_nodes == 1
+    assert validated.protein_nodes == standard_expected()["protein_nodes"]
+    assert validated.nucleotide_nodes == standard_expected()["nucleotide_nodes"]

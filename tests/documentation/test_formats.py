@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -11,12 +10,12 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from standard_target import load_standard_full_atom_targets, standard_expected
 
 import cryoflake
 from cryoflake import (
     FULL_ATOM_TARGET_SCHEMA_VERSION,
     FASTASequence,
-    build_component_extension_targets,
     load_preprocessed_artifact,
     preprocessed_artifact_root,
     validate_component_extension_targets,
@@ -45,6 +44,8 @@ from cryoflake.storage.transports import is_remote_uri
 from cryoflake.targets.full_atom import extract_full_atom_targets
 
 from .examples import get_example
+
+EXPECTED = standard_expected()
 
 pytestmark = pytest.mark.documentation
 
@@ -105,7 +106,10 @@ def test_fasta_reading_and_portable_record_roundtrip_example():
 
 
 def test_artifact_reference_examples_load_the_same_payload(doc_workspace, monkeypatch):
-    doc_workspace.seed_training("artifacts/example")
+    doc_workspace.seed_training("artifacts/example", include_sequence=True)
+    doc_workspace.seed_training(
+        "s3://my-bucket/artifacts/example", include_sequence=True
+    )
     references = []
     payloads = []
 
@@ -141,6 +145,7 @@ def test_artifact_reference_examples_load_the_same_payload(doc_workspace, monkey
 
 
 def test_documented_artifact_layout_matches_split_artifact_members(doc_workspace):
+    doc_workspace.seed_training("data/artifacts/example", include_sequence=True)
     layout = get_example("artifact-layout").code
     documented_members = re.findall(r"^[├└]── ([^\s#]+)", layout, re.M)
     assert documented_members
@@ -229,7 +234,8 @@ def test_validate_command_checks_float64_embeddings_once_and_reports_dimensions(
 ):
     artifact_reference = "data/artifacts/example"
     artifact_mapping = load_preprocessed_artifact(artifact_reference)
-    sequence = np.arange(16, dtype=np.float64).reshape(2, 8)
+    residue_count = EXPECTED["full_atom_residue_count"]
+    sequence = np.arange(residue_count * 8, dtype=np.float64).reshape(residue_count, 8)
     artifact_mapping["sequence"] = sequence
     write_preprocessed_artifact(artifact_reference, artifact_mapping)
     normalized_dtypes = []
@@ -248,11 +254,11 @@ def test_validate_command_checks_float64_embeddings_once_and_reports_dimensions(
     result = doc_workspace.invoke(get_example("guide-validate").commands()[0])
 
     summary = json.loads(result.output)
-    assert summary["grid_shape"] == [4, 4, 4]
-    assert summary["protein_nodes"] == 1
-    assert summary["nucleotide_nodes"] == 1
-    assert summary["component_nodes"] == 1
-    assert summary["sequence_length"] == 2
+    assert summary["grid_shape"] == list(EXPECTED["grid_shape"])
+    assert summary["protein_nodes"] == EXPECTED["protein_nodes"]
+    assert summary["nucleotide_nodes"] == EXPECTED["nucleotide_nodes"]
+    assert summary["component_nodes"] == EXPECTED["component_nodes"]
+    assert summary["sequence_length"] == residue_count
     assert summary["sequence_feature_dim"] == 8
     assert normalized_dtypes == [np.dtype(np.float64)]
     stored_sequence = load_preprocessed_artifact(artifact_reference)["sequence"]
@@ -305,16 +311,18 @@ def test_coordinate_example_agrees_with_semantic_validation(
 
     payload = load_preprocessed_artifact("data/artifacts/example")
     payload.update(density_grid=grid, global_origin=origin, voxel_size=2.0)
-    payload["backbone_coordinates"]["CA"] = coordinate.reshape(1, 3)
+    payload["backbone_coordinates"]["CA"][:] = np.nan
+    payload["backbone_coordinates"]["CA"][0] = coordinate
     # The contract needs one CA/P anchor inside; the other anchor must not hide failures.
-    payload["backbone_coordinates"]["P"] = np.full((1, 3), np.nan, dtype=np.float32)
+    payload["backbone_coordinates"]["P"][:] = np.nan
     reference = doc_workspace.root / "geometry-example"
     write_preprocessed_artifact(reference, payload)
 
     if expected_inside:
         result = validate_preprocessed_artifact(reference)
         assert result.grid_shape == grid.shape
-        assert result.protein_nodes == result.nucleotide_nodes == 1
+        assert result.protein_nodes == EXPECTED["protein_nodes"]
+        assert result.nucleotide_nodes == EXPECTED["nucleotide_nodes"]
     else:
         with pytest.raises(ValueError, match="preprocessing contract"):
             validate_preprocessed_artifact(reference)
@@ -367,10 +375,9 @@ def _assert_geometry_example_and_validate_command(
     artifact_mapping.update(
         density_grid=grid, global_origin=origin, voxel_size=voxel_size
     )
-    artifact_mapping["backbone_coordinates"]["CA"] = coordinate.reshape(1, 3)
-    artifact_mapping["backbone_coordinates"]["P"] = np.full(
-        (1, 3), np.nan, dtype=np.float32
-    )
+    artifact_mapping["backbone_coordinates"]["CA"][:] = np.nan
+    artifact_mapping["backbone_coordinates"]["CA"][0] = coordinate
+    artifact_mapping["backbone_coordinates"]["P"][:] = np.nan
     write_preprocessed_artifact(artifact_reference, artifact_mapping)
 
     result = doc_workspace.invoke(
@@ -381,13 +388,15 @@ def _assert_geometry_example_and_validate_command(
         assert result.exit_code == 0, result.output
         summary = json.loads(result.output)
         assert summary["grid_shape"] == [2, 3, 5]
-        assert summary["protein_nodes"] == summary["nucleotide_nodes"] == 1
+        assert summary["protein_nodes"] == EXPECTED["protein_nodes"]
+        assert summary["nucleotide_nodes"] == EXPECTED["nucleotide_nodes"]
     else:
         assert result.exit_code == 1
         assert "canonical preprocessing contract" in result.output
 
 
 def test_metadata_required_field_table_matches_real_artifacts(doc_workspace):
+    doc_workspace.seed_training("data/artifacts/example", include_sequence=True)
     section = _reference_section("artifact-tree", "## Metadata object")
     rows = _table_rows(section)
     documented_fields = {row[0].strip("`") for row in rows if row[0].startswith("`")}
@@ -432,24 +441,51 @@ def test_full_atom_shape_and_dtype_table_matches_validated_targets(doc_workspace
 
 
 def _sparse_named_full_atom_mapping():
+    """Explicit sparse-mask mutation of two genuine 7AE1 residue rows."""
     artifact_mapping = load_preprocessed_artifact("data/artifacts/example")
     targets = artifact_mapping["full_atom_targets"]
+    selected_rows = [0, EXPECTED["protein_nodes"]]
+    for field, value in targets.items():
+        if isinstance(value, np.ndarray) and field != "atom_names":
+            targets[field] = value[selected_rows].copy()
+    names = targets["atom_names"].tolist()
     targets["atom_names"] = np.asarray(
-        [f"slot_{slot}".encode() for slot in range(65)], dtype="S8"
+        [f"  {name.lower()}  ".encode() for name in names]
     )
-    targets["atom_names"][[2, 7, 23, 31, 64]] = [b" n ", b"ca", b"o", b"p", b"c1'"]
-    targets["atom_mask"][0, [2, 7, 23]] = True
-    targets["atom_mask"][1, [31, 64]] = True
-    targets["atom_positions"][0, [2, 7, 23]] = [
-        [1.0, 0.0, 1.0],
-        [1.0, 1.0, 1.0],
-        [2.0, 2.0, 1.0],
-    ]
-    targets["atom_positions"][1, [31, 64]] = [
-        [2.0, 2.0, 2.0],
-        [3.0, 2.0, 2.0],
-    ]
+    targets["atom_mask"][:] = False
+    targets["atom_mask"][0, [names.index(name) for name in ("N", "CA", "O")]] = True
+    targets["atom_mask"][1, [names.index(name) for name in ("P", "C1'")]] = True
+    for atom, coordinates in artifact_mapping["backbone_coordinates"].items():
+        artifact_mapping["backbone_coordinates"][atom] = coordinates[:1].copy()
+    artifact_mapping["residue_info"]["aa_type"] = artifact_mapping["residue_info"][
+        "aa_type"
+    ][:1]
+    artifact_mapping["residue_info"]["nuc_type"] = artifact_mapping["residue_info"][
+        "nuc_type"
+    ][:1]
     return artifact_mapping
+
+
+def test_named_full_atom_roundtrip_preserves_standard_deposited_geometry(doc_workspace):
+    original = load_standard_full_atom_targets()
+
+    namespace = get_example("contract-full-atom-roundtrip").execute()
+
+    restored = namespace["restored_targets"]
+    assert set(restored) == set(original)
+    for field, value in original.items():
+        np.testing.assert_array_equal(restored[field], value, err_msg=field)
+    assert len(namespace["named_residues"]) == EXPECTED["full_atom_residue_count"]
+    assert (
+        sum(
+            len(residue["atom_positions_by_name"])
+            for residue in namespace["named_residues"]
+        )
+        == EXPECTED["present_atom_count"]
+    )
+    assert np.count_nonzero(namespace["protein_mask"]) == EXPECTED["protein_nodes"]
+    assert np.any(restored["rigidgroups_gt_exists"])
+    assert np.any(restored["torsion_angles_mask"])
 
 
 def test_named_full_atom_roundtrip_reconstructs_sparse_atoms_from_the_guide(
@@ -468,14 +504,11 @@ def test_named_full_atom_roundtrip_reconstructs_sparse_atoms_from_the_guide(
     assert restored_targets["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION
     assert restored_targets["atom_names"].dtype.kind == "U"
     assert restored_targets["atom_names"].shape == (65,)
-    assert restored_targets["atom_names"].dtype.itemsize == 4 * len("SLOT_63")
-    assert restored_targets["atom_names"][[2, 7, 23, 31, 64]].tolist() == [
-        "N",
-        "CA",
-        "O",
-        "P",
-        "C1'",
-    ]
+    expected_names = load_standard_full_atom_targets()["atom_names"]
+    np.testing.assert_array_equal(restored_targets["atom_names"], expected_names)
+    assert restored_targets["atom_names"].dtype.itemsize >= 4 * max(
+        map(len, expected_names)
+    )
     assert len(set(restored_targets["atom_names"])) == 65
     assert all(restored_targets["atom_names"])
     np.testing.assert_array_equal(
@@ -484,17 +517,17 @@ def test_named_full_atom_roundtrip_reconstructs_sparse_atoms_from_the_guide(
     np.testing.assert_array_equal(
         restored_targets["atom_positions"], original_targets["atom_positions"]
     )
-    assert not restored_targets["atom_mask"][0, :2].any()
     protein, nucleotide = namespace["named_residues"]
-    assert (protein["chain_index"], protein["residue_index"]) == (0, 10)
-    assert (nucleotide["chain_index"], nucleotide["residue_index"]) == (1, 20)
     assert set(protein["atom_positions_by_name"]) == {"N", "CA", "O"}
     assert set(nucleotide["atom_positions_by_name"]) == {"P", "C1'"}
-    np.testing.assert_array_equal(protein["atom_positions_by_name"]["CA"], [1, 1, 1])
-    np.testing.assert_array_equal(nucleotide["atom_positions_by_name"]["P"], [2, 2, 2])
-    np.testing.assert_array_equal(
-        nucleotide["atom_positions_by_name"]["C1'"], [3, 2, 2]
-    )
+    for row, residue in enumerate((protein, nucleotide)):
+        assert residue["chain_index"] == original_targets["chain_index"][row]
+        assert residue["residue_index"] == original_targets["residue_index"][row]
+        for name, position in residue["atom_positions_by_name"].items():
+            slot = expected_names.tolist().index(name)
+            np.testing.assert_array_equal(
+                position, original_targets["atom_positions"][row, slot]
+            )
 
     artifact_dir = doc_workspace.root / "data/artifacts/named-roundtrip"
     metadata = read_metadata(artifact_dir / "metadata.json")
@@ -526,10 +559,17 @@ def test_named_full_atom_roundtrip_reconstructs_sparse_atoms_from_the_guide(
 def test_documented_full_atom_extractor_preserves_shared_names_and_reorders_rows(
     doc_workspace,
 ):
-    targets = _sparse_named_full_atom_mapping()["full_atom_targets"]
+    targets = load_standard_full_atom_targets()
+    protein_count = EXPECTED["protein_nodes"]
+    source_order = np.concatenate(
+        [
+            np.arange(protein_count, EXPECTED["full_atom_residue_count"]),
+            np.arange(protein_count),
+        ]
+    )
     source = SimpleNamespace(
         **{
-            name: value if name == "atom_names" else value[::-1]
+            name: value if name == "atom_names" else value[source_order]
             for name, value in targets.items()
             if isinstance(value, np.ndarray)
         }
@@ -540,16 +580,13 @@ def test_documented_full_atom_extractor_preserves_shared_names_and_reorders_rows
 
     assert extracted["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION == 1
     assert "prot_mask" not in extracted
-    np.testing.assert_array_equal(extracted["aatype"], [0, 24])
-    np.testing.assert_array_equal(extracted["chain_index"], [0, 1])
-    np.testing.assert_array_equal(extracted["residue_index"], [10, 20])
+    for field in ("aatype", "chain_index", "residue_index"):
+        np.testing.assert_array_equal(extracted[field], targets[field])
     np.testing.assert_array_equal(extracted["atom_mask"], targets["atom_mask"])
     np.testing.assert_array_equal(
         extracted["atom_names"], validate_full_atom_targets(targets)["atom_names"]
     )
     assert extracted["atom_names"].shape == (65,)
-    assert extracted["atom_names"][[2, 7, 23]].tolist() == ["N", "CA", "O"]
-    assert extracted["atom_names"][[31, 64]].tolist() == ["P", "C1'"]
     np.testing.assert_array_equal(
         extracted["atom_positions"], targets["atom_positions"]
     )
@@ -613,15 +650,22 @@ def test_documented_full_atom_schema_rejects_legacy_or_unsupported_mappings(
 
 
 @pytest.mark.parametrize(
-    "bad_name", ["", "  ", "ca", "slot_1", "C A", "α", 7, None, b"\xff"]
+    "bad_name", ["", "  ", "duplicate", "C A", "α", 7, None, b"\xff"]
 )
-@pytest.mark.parametrize("slot", [0, 2])
+@pytest.mark.parametrize("slot_kind", ["masked", "present"])
 def test_documented_full_atom_names_reject_invalid_even_fully_masked_slots(
-    doc_workspace, bad_name, slot
+    doc_workspace, bad_name, slot_kind
 ):
     targets = _sparse_named_full_atom_mapping()["full_atom_targets"]
     targets["atom_names"] = targets["atom_names"].astype(object)
-    assert not targets["atom_mask"][:, 0].any()
+    normalized_names = validate_full_atom_targets(targets)["atom_names"].tolist()
+    slot = (
+        int(np.flatnonzero(~targets["atom_mask"].any(axis=0))[0])
+        if slot_kind == "masked"
+        else normalized_names.index("O")
+    )
+    if bad_name == "duplicate":
+        bad_name = "  n  "
     targets["atom_names"][slot] = bad_name
     with pytest.raises(ValueError, match="atom_names"):
         validate_full_atom_targets(targets)
@@ -704,35 +748,22 @@ def test_component_fields_and_enum_tables_match_validated_schema(doc_workspace):
 def test_component_reader_example_derives_values_and_keeps_stored_proposals(
     doc_workspace,
 ):
-    source_path = doc_workspace.root / "data/derived-components.cif"
-    source = (doc_workspace.root / "data/model.cif").read_text()
-    source = source.replace(
-        "3 non-polymer\n", "3 non-polymer\n4 water\n5 non-polymer\n"
-    ).replace(
-        "LIG 'NON-POLYMER'\n",
-        "LIG 'NON-POLYMER'\nHOH WATER\nZN 'NON-POLYMER'\n",
-    )
-    source += (
-        "HETATM O . HOH D 4 . D 40 ? 1 O 1.0 20.0 3.8 3.8 3.8\n"
-        "HETATM ZN . ZN E 5 . E 50 ? 1 ZN 1.0 20.0 2.4 2.0 2.0\n"
-    )
-    source_path.write_text(source)
     artifact_mapping = load_preprocessed_artifact("data/artifacts/example")
-    extension = build_component_extension_targets(
-        source_path,
-        global_origin=artifact_mapping["global_origin"],
-        voxel_size=artifact_mapping["voxel_size"],
-        grid_shape=artifact_mapping["density_grid"].shape,
-        polymer_atom_positions=np.asarray([[1, 1, 1], [2, 2, 2]], dtype=np.float32),
-        polymer_atom_node_indices=np.asarray([0, 1], dtype=np.int64),
-        polymer_chain_indices=np.asarray([0, 1], dtype=np.int64),
-        polymer_residue_indices=np.asarray([10, 20], dtype=np.int64),
-        polymer_aatype=np.asarray([0, 24], dtype=np.int64),
-        interface_contact_cutoff=0.75,
-    )
+    extension = artifact_mapping["extension_targets"]
     component = extension["component"]
-    component["proposal_targets"]["node_indices"] = np.asarray([2, 0], dtype=np.int64)
+    # Explicit water/filter edge case: replace one real single-atom magnesium
+    # node's labels while retaining its deposited coordinates and padding.
+    water_row = int(np.flatnonzero(component["component_id"] == "MG")[0])
+    component["component_id"][water_row] = "HOH"
+    component["node_kind"][water_row] = int(NodeKind.WATER)
+    component["source_chem_comp_type"][water_row] = "WATER"
+    component["atom_names"][water_row, 0] = "O"
+    component["atom_elements"][water_row, 0] = "O"
+    component["interface_group_id"][water_row] = ""
+    indices = np.asarray([EXPECTED["component_nodes"] - 1, 0], dtype=np.int64)
+    component["proposal_targets"]["node_indices"] = indices
     component["proposal_targets"]["valid_mask"] = np.asarray([False, True])
+    expected = validate_component_extension_targets(extension)["component"]
     identity_text = {
         field: np.asarray([f"  {value}  " for value in component[field]])
         for field in ("instance_id", "chain_id", "insertion_code")
@@ -760,42 +791,50 @@ def test_component_reader_example_derives_values_and_keeps_stored_proposals(
                 for value in values.flat
             ]
         ).reshape(values.shape)
-    artifact_mapping["extension_targets"] = extension
     write_preprocessed_artifact("data/artifacts/example", artifact_mapping)
 
     namespace = get_example("contract-component-derived").execute()
 
     component = namespace["component"]
-    assert component["component_id"].tolist() == ["LIG", "HOH", "ZN"]
-    assert component["atom_names"].tolist() == [["C1", "O1"], ["O", ""], ["ZN", ""]]
-    assert component["atom_elements"].tolist() == [["C", "O"], ["O", ""], ["ZN", ""]]
-    assert component["interface_group_id"][1] == ""
+    for field in ("component_id", "atom_names", "atom_elements", "interface_group_id"):
+        np.testing.assert_array_equal(component[field], expected[field])
     for field, values in identity_text.items():
         np.testing.assert_array_equal(component[field], values)
-    assert component["node_kind"].tolist() == [
-        int(NodeKind.NON_POLYMER),
-        int(NodeKind.WATER),
-        int(NodeKind.ION),
-    ]
-    np.testing.assert_array_equal(
-        namespace["component_atom_mask"], [[True, True], [True, False], [True, False]]
+    assert component["node_kind"][water_row] == int(NodeKind.WATER)
+    assert component["component_id"][water_row] == "HOH"
+    atom_mask = namespace["component_atom_mask"]
+    assert atom_mask.shape == (EXPECTED["component_nodes"], 8)
+    assert int(np.count_nonzero(atom_mask)) == EXPECTED["component_atom_count"]
+    assert atom_mask[water_row].tolist() == [True] + [False] * 7
+    assert (
+        np.count_nonzero(namespace["component_interface_mask"])
+        == EXPECTED["interface_nodes"] - 1
+    )
+    assert not namespace["component_interface_mask"][water_row]
+    assert set(namespace["component_groups"]) == set(EXPECTED["component_ids"]) - {"MG"}
+    assert "HOH" not in namespace["component_groups"]
+    assert namespace["interface_groups"] == tuple(
+        sorted(set(expected["interface_group_id"]) - {""})
     )
     np.testing.assert_array_equal(
-        namespace["component_interface_mask"], [True, False, True]
+        namespace["proposal_positions"], component["positions"][indices]
     )
-    ligand_digest = hashlib.sha256(repr([(0, 10, 0)]).encode()).hexdigest()[:16]
-    ion_digest = hashlib.sha256(repr([(1, 20, 24)]).encode()).hexdigest()[:16]
-    assert namespace["component_groups"] == ("LIG", "ZN")
-    assert namespace["interface_groups"] == (f"LIG|{ligand_digest}", f"ZN|{ion_digest}")
     np.testing.assert_array_equal(
-        namespace["proposal_positions"], component["positions"][[2, 0]]
+        component["proposal_targets"]["node_indices"], indices
     )
-    np.testing.assert_array_equal(component["proposal_targets"]["node_indices"], [2, 0])
     np.testing.assert_array_equal(
         component["proposal_targets"]["valid_mask"], [False, True]
     )
-    # The ion anchor is inside the grid, but custom proposal validity stays false.
-    assert np.all((component["positions"][2] >= 0) & (component["positions"][2] < 4))
+    # All genuine component anchors were in bounds; custom validity remains false.
+    relative = (
+        component["positions"][indices[0]].astype(np.float64)
+        - artifact_mapping["global_origin"]
+    )
+    extent = (
+        np.asarray(artifact_mapping["density_grid"].shape[::-1])
+        * artifact_mapping["voxel_size"]
+    )
+    assert np.all((relative >= 0) & (relative < extent))
     assert {"atom_mask", "interface_mask", "split_groups"}.isdisjoint(component)
     assert set(component["proposal_targets"]) == {"node_indices", "valid_mask"}
 
@@ -823,7 +862,7 @@ def test_component_reader_example_derives_values_and_keeps_stored_proposals(
             for key in arrays.files
         )
         np.testing.assert_array_equal(
-            arrays["extension_targets/component/proposal_targets/node_indices"], [2, 0]
+            arrays["extension_targets/component/proposal_targets/node_indices"], indices
         )
         np.testing.assert_array_equal(
             arrays["extension_targets/component/proposal_targets/valid_mask"],
@@ -997,6 +1036,7 @@ def test_configuration_tables_match_all_pipeline_defaults(doc_workspace):
 
 
 def test_training_root_table_matches_the_canonical_semantic_contract(doc_workspace):
+    doc_workspace.seed_training("data/artifacts/example", include_sequence=True)
     section = _reference_section("contract-geometry", "## Complete training payload")
     section = re.split(r"^### ", section, maxsplit=1, flags=re.M)[0]
     documented_fields = {

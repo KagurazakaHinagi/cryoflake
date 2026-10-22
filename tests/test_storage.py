@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from standard_target import load_standard_artifact_mapping, standard_expected
 
 from cryoflake import (
     FASTASequence,
@@ -26,14 +27,11 @@ from cryoflake.storage.transports import join_remote_uri, split_s3_uri
 
 
 def _payload(*, include_sequence: bool = True) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "density_grid": np.arange(64, dtype=np.float64).reshape(4, 4, 4),
-        "voxel_size": np.float32(1.25),
-        "global_origin": np.asarray([1.0, 2.0, 3.0], dtype=np.float32),
-        "backbone_coordinates": {"CA": np.arange(6, dtype=np.float32).reshape(2, 3)},
-        "metadata": {"source": "test"},
-    }
+    payload = load_standard_artifact_mapping()
+    # Explicit dtype-conversion probe on the canonical real density.
+    payload["density_grid"] = payload["density_grid"].astype(np.float64)
     if include_sequence:
+        # Controlled numeric embeddings test storage, not model inference.
         payload.update(
             {
                 "sequence": np.arange(12, dtype=np.float32).reshape(2, 6),
@@ -90,6 +88,18 @@ def test_local_round_trip_uses_split_stores_and_float32_grid(tmp_path):
         == hashlib.sha256((artifact / "sequence.npz").read_bytes()).hexdigest()
     )
     assert preprocessed_artifact_exists(artifact)
+    validated = validate_preprocessed_artifact(
+        artifact, require_sequence_embeddings=True
+    )
+    expected = standard_expected()
+    assert validated.grid_shape == expected["grid_shape"]
+    assert validated.protein_nodes == expected["protein_nodes"]
+    assert validated.nucleotide_nodes == expected["nucleotide_nodes"]
+    assert validated.component_nodes == expected["component_nodes"]
+    np.testing.assert_array_equal(
+        loaded["full_atom_targets"]["atom_names"],
+        payload["full_atom_targets"]["atom_names"],
+    )
 
 
 @pytest.mark.parametrize("representation", ["array", "npy", "npz"])
@@ -373,6 +383,9 @@ def test_s3_artifact_round_trip_and_sequence_replacement(monkeypatch):
     assert preprocessed_artifact_exists(root)
     loaded = load_preprocessed_artifact(root)
     np.testing.assert_array_equal(loaded["sequence"], _payload()["sequence"])
+    validated = validate_preprocessed_artifact(root, require_sequence_embeddings=True)
+    assert validated.protein_nodes == standard_expected()["protein_nodes"]
+    assert validated.component_nodes == standard_expected()["component_nodes"]
     core_before = objects[("bucket", "artifacts/example/core.npz")]
     sequence = np.ones((2, 4), dtype=np.float32)
     replace_preprocessed_artifact_sequence(root, {"sequence": sequence})

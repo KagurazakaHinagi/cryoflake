@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from standard_target import load_standard_full_atom_targets, standard_expected
 
 from cryoflake.constants import (
     FULL_ATOM_COUNT,
@@ -20,78 +21,117 @@ from cryoflake.targets.full_atom import (
 
 
 def _target_source():
-    num_residues = 3
-    row_values = np.arange(num_residues, dtype=np.float32)
-
-    def filled(trailing_shape):
-        values = np.zeros((num_residues, *trailing_shape), dtype=np.float32)
-        values[...] = row_values.reshape((num_residues,) + (1,) * len(trailing_shape))
-        return values
-
     return SimpleNamespace(
-        aatype=np.asarray([20, 0, 24], dtype=np.int64),
-        chain_index=np.asarray([1, 0, 2], dtype=np.int64),
-        residue_index=np.asarray([5, 10, 6], dtype=np.int64),
-        atom_positions=filled((FULL_ATOM_COUNT, 3)),
-        atom_names=np.asarray([f" c{slot} " for slot in range(FULL_ATOM_COUNT)]),
-        atom_mask=np.ones((num_residues, FULL_ATOM_COUNT), dtype=np.float32),
-        b_factors=filled((FULL_ATOM_COUNT,)),
-        rigidgroups_gt_frames=filled((RIGID_GROUP_COUNT, 3, 4)),
-        rigidgroups_gt_exists=np.ones(
-            (num_residues, RIGID_GROUP_COUNT), dtype=np.float32
-        ),
-        rigidgroups_group_exists=np.ones(
-            (num_residues, RIGID_GROUP_COUNT), dtype=np.float32
-        ),
-        rigidgroups_group_is_ambiguous=np.zeros(
-            (num_residues, RIGID_GROUP_COUNT), dtype=np.float32
-        ),
-        rigidgroups_alt_gt_frames=filled((RIGID_GROUP_COUNT, 3, 4)),
-        torsion_angles_sin_cos=filled((TORSION_COUNT, 2)),
-        alt_torsion_angles_sin_cos=filled((TORSION_COUNT, 2)),
-        torsion_angles_mask=np.ones((num_residues, TORSION_COUNT), dtype=np.float32),
+        **{
+            key: value
+            for key, value in load_standard_full_atom_targets().items()
+            if key != "schema_version"
+        }
+    )
+
+
+def _source_rows(source, rows):
+    return SimpleNamespace(
+        **{
+            key: value if key == "atom_names" else value[rows]
+            for key, value in vars(source).items()
+        }
     )
 
 
 def test_full_atom_targets_follow_ca_then_p_node_order():
-    targets = extract_full_atom_targets(target_source=_target_source())
+    expected = load_standard_full_atom_targets()
+    metadata = standard_expected()
+    protein_count = metadata["protein_nodes"]
+    residue_count = metadata["full_atom_residue_count"]
+    # Deliberately put the authentic nucleotide block first. Extraction must
+    # reorder every residue-indexed cache without touching the shared table.
+    source_order = np.r_[protein_count:residue_count, :protein_count]
+    targets = extract_full_atom_targets(_source_rows(_target_source(), source_order))
 
-    np.testing.assert_array_equal(targets["aatype"], [0, 20, 24])
+    for key, value in expected.items():
+        np.testing.assert_array_equal(targets[key], value)
     assert "prot_mask" not in targets
     assert "prot_mask" not in FULL_ATOM_TARGET_KEYS
     protein_mask = (targets["aatype"] < 20) | (
         targets["aatype"] == UNKNOWN_PROTEIN_INDEX
     )
-    np.testing.assert_array_equal(protein_mask, [True, False, False])
-    np.testing.assert_array_equal(targets["chain_index"], [0, 1, 2])
-    np.testing.assert_array_equal(targets["residue_index"], [10, 5, 6])
-    np.testing.assert_array_equal(targets["atom_positions"][:, 0, 0], [1, 0, 2])
     np.testing.assert_array_equal(
-        targets["atom_names"], [f"C{slot}" for slot in range(FULL_ATOM_COUNT)]
+        protein_mask, np.arange(residue_count) < protein_count
     )
+    assert targets["atom_names"][:5].tolist() == ["N", "CA", "C", "O", "CB"]
+    assert targets["atom_names"][[36, 37, 63, 64]].tolist() == [
+        "OP1",
+        "P",
+        "O2'",
+        "OXT",
+    ]
     assert targets["atom_names"].shape == (FULL_ATOM_COUNT,)
     assert targets["atom_names"].dtype.kind == "U"
     assert targets["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION == 1
     assert targets["atom_positions"].dtype == np.float32
     assert targets["atom_mask"].dtype == np.bool_
-    assert targets["rigidgroups_gt_frames"].shape == (3, 9, 3, 4)
-    assert targets["torsion_angles_sin_cos"].shape == (3, 8, 2)
+    assert int(targets["atom_mask"].sum()) == metadata["present_atom_count"]
+    assert not targets["atom_mask"].all()
+    assert targets["rigidgroups_gt_frames"].shape == (
+        residue_count,
+        RIGID_GROUP_COUNT,
+        3,
+        4,
+    )
+    assert targets["torsion_angles_sin_cos"].shape == (residue_count, TORSION_COUNT, 2)
+    assert np.any(np.abs(targets["rigidgroups_gt_frames"][..., 3]) > 1)
+    assert np.any(np.abs(targets["torsion_angles_sin_cos"]) > 0.1)
+    assert targets["torsion_angles_mask"].any()
+    assert np.any(targets["b_factors"][targets["atom_mask"]] > 0)
+    for sample_name in ("protein_ca_sample", "nucleotide_p_sample"):
+        sample = metadata[sample_name]
+        row, slot = sample["row"], sample["slot"]
+        assert targets["atom_mask"][row, slot]
+        assert targets["atom_names"][slot] == sample["atom_name"]
+        assert targets["residue_index"][row] == sample["residue_index"]
+        np.testing.assert_array_equal(
+            targets["atom_positions"][row, slot],
+            np.asarray(sample["coordinate"], dtype=np.float32),
+        )
+    frame = metadata["rigid_frame_sample"]
+    np.testing.assert_array_equal(
+        targets["rigidgroups_gt_frames"][frame["row"], frame["group"]],
+        np.asarray(frame["matrix"], dtype=np.float32),
+    )
+    torsion = metadata["torsion_sample"]
+    np.testing.assert_array_equal(
+        targets["torsion_angles_sin_cos"][torsion["row"], torsion["torsion"]],
+        np.asarray(torsion["sin_cos"], dtype=np.float32),
+    )
 
 
 def test_validate_full_atom_targets_checks_coordinate_counts():
     targets = extract_full_atom_targets(_target_source())
+    protein_count = standard_expected()["protein_nodes"]
+    nucleotide_count = standard_expected()["nucleotide_nodes"]
 
     with pytest.raises(ValueError, match="protein count"):
-        validate_full_atom_targets(targets, num_protein=2, num_nucleotide=1)
+        validate_full_atom_targets(
+            targets, num_protein=protein_count + 1, num_nucleotide=nucleotide_count
+        )
     with pytest.raises(ValueError, match="nucleotide count"):
-        validate_full_atom_targets(targets, num_protein=1, num_nucleotide=1)
+        validate_full_atom_targets(
+            targets, num_protein=protein_count, num_nucleotide=nucleotide_count + 1
+        )
 
 
-@pytest.mark.parametrize("protein_mask", [[True, False, False], None, [False] * 3])
+@pytest.mark.parametrize("protein_mask", ["derived", None, "all_false"])
 def test_full_atom_targets_reject_removed_protein_mask_even_when_consistent(
     protein_mask,
 ):
     targets = extract_full_atom_targets(_target_source())
+    if protein_mask == "derived":
+        protein_mask = (targets["aatype"] < 20) | (
+            targets["aatype"] == UNKNOWN_PROTEIN_INDEX
+        )
+    elif protein_mask == "all_false":
+        protein_mask = np.zeros(len(targets["aatype"]), dtype=bool)
     targets["prot_mask"] = protein_mask
     with pytest.raises(ValueError, match="prot_mask.*must not be stored"):
         validate_full_atom_targets(targets)
@@ -99,17 +139,22 @@ def test_full_atom_targets_reject_removed_protein_mask_even_when_consistent(
 
 def test_protein_mask_derivation_preserves_unknown_proteins_and_node_order():
     source = _target_source()
-    source.aatype = np.asarray([20, UNKNOWN_PROTEIN_INDEX, 0])
+    first_nucleotide = standard_expected()["protein_nodes"]
+    selected_rows = [first_nucleotide, 0, 1]
+    source = _source_rows(source, selected_rows)
+    source.aatype[1] = UNKNOWN_PROTEIN_INDEX
     targets = extract_full_atom_targets(source)
-    np.testing.assert_array_equal(targets["aatype"], [UNKNOWN_PROTEIN_INDEX, 0, 20])
-    np.testing.assert_array_equal(targets["atom_positions"][:, 0, 0], [1, 2, 0])
+    np.testing.assert_array_equal(targets["aatype"], source.aatype[[1, 2, 0]])
+    np.testing.assert_array_equal(
+        targets["atom_positions"], source.atom_positions[[1, 2, 0]]
+    )
     normalized = validate_full_atom_targets(targets, num_protein=2, num_nucleotide=1)
     assert "prot_mask" not in normalized
 
 
 def test_full_atom_targets_reject_unsorted_residue_classes_without_stored_mask():
     targets = extract_full_atom_targets(_target_source())
-    targets["aatype"] = np.asarray([20, 0, 24])
+    targets["aatype"] = np.roll(targets["aatype"], 1)
     with pytest.raises(ValueError, match="protein rows before nucleotide rows"):
         validate_full_atom_targets(targets)
 
@@ -152,7 +197,7 @@ def test_full_atom_masks_are_validated_before_float32_rounding(value):
 
 def test_full_atom_residue_indices_do_not_wrap_uint64():
     targets = extract_full_atom_targets(_target_source())
-    targets["residue_index"] = np.full(3, 2**63, dtype=np.uint64)
+    targets["residue_index"] = np.full(len(targets["aatype"]), 2**63, dtype=np.uint64)
     with pytest.raises(ValueError, match="int64|representable"):
         validate_full_atom_targets(targets)
 
@@ -277,7 +322,7 @@ def test_full_atom_masked_slots_keep_names_without_zero_padding_requirements():
     np.testing.assert_array_equal(normalized["b_factors"][:, 1:], 17)
 
 
-@pytest.mark.parametrize("invalid_name", ["", "  ", " C1 ", "C;injected"])
+@pytest.mark.parametrize("invalid_name", ["", "  ", " ca ", "C;injected"])
 def test_full_atom_names_validate_slots_even_when_unobserved_in_every_residue(
     invalid_name,
 ):
@@ -294,20 +339,15 @@ def test_full_atom_names_validate_slots_even_when_unobserved_in_every_residue(
 @pytest.mark.parametrize("array_dtype", [object, "S16"])
 def test_full_atom_names_decode_utf8_bytes_and_normalize_to_unicode(array_dtype):
     targets = extract_full_atom_targets(_target_source())
-    names = np.char.encode(targets["atom_names"], "utf-8").astype(array_dtype)
-    names[:7] = [b" n ", b" ca ", b"o5'", b'C1"', b"H*", b"N+", b"C-1"]
+    expected_names = targets["atom_names"].copy()
+    names = np.asarray(
+        [f" {name.lower()} ".encode("utf-8") for name in expected_names],
+        dtype=array_dtype,
+    )
     targets["atom_names"] = names
     normalized = validate_full_atom_targets(targets)
     assert normalized["atom_names"].dtype.kind == "U"
-    assert normalized["atom_names"][:7].tolist() == [
-        "N",
-        "CA",
-        "O5'",
-        'C1"',
-        "H*",
-        "N+",
-        "C-1",
-    ]
+    np.testing.assert_array_equal(normalized["atom_names"], expected_names)
 
 
 def test_full_atom_names_reject_invalid_utf8_bytes():
@@ -368,12 +408,12 @@ def test_empty_numeric_full_atom_names_are_rejected_as_nonstring_input():
         if key not in {"aatype", "atom_names"}
     ],
 )
-@pytest.mark.parametrize("row_count", [2, 4])
-def test_extract_full_atom_targets_rejects_unaligned_source_rows(field, row_count):
+@pytest.mark.parametrize("row_difference", [-1, 1])
+def test_extract_full_atom_targets_rejects_unaligned_source_rows(field, row_difference):
     source = _target_source()
     values = getattr(source, field)
-    if row_count < len(values):
-        values = values[:row_count]
+    if row_difference < 0:
+        values = values[:-1]
     else:
         values = np.concatenate((values, values[:1]), axis=0)
     setattr(source, field, values)
@@ -422,7 +462,7 @@ def test_numeric_full_atom_masks_use_bounded_checks_and_preserve_strided_values(
     monkeypatch,
 ):
     targets = extract_full_atom_targets(_target_source())
-    backing = np.zeros((3, FULL_ATOM_COUNT * 2), dtype=np.float64)
+    backing = np.zeros((len(targets["aatype"]), FULL_ATOM_COUNT * 2), dtype=np.float64)
     backing[:, ::2] = targets["atom_mask"]
     targets["atom_mask"] = backing[:, ::2]
     assert not targets["atom_mask"].flags.c_contiguous

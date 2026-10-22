@@ -82,6 +82,23 @@ exempt a behavioral claim from testing.
   behavior or contract, run the existing documentation checks and state why
   existing coverage is sufficient. Do not add tests that merely match prose.
 
+## Standard offline molecular target
+
+Use the compact EMD-11736 / 7AE1 fixture through
+[`tests/standard_target.py`](tests/standard_target.py) for general molecular
+artifact, validation, and workflow tests. Its
+[README](tests/fixtures/emd_11736_7ae1/README.md) and
+[provenance](tests/fixtures/emd_11736_7ae1/provenance.json) describe the real
+structure subset, extracted targets, and downsampled density. Keep genuine
+coordinates, atom names, masks, and cached geometry as the reference values.
+Load independent copies before making changes.
+
+Synthetic inputs and mutations remain appropriate when the behavior under
+test is an invalid value, boundary, format, or rare molecular case. State that
+purpose locally; do not introduce an unrelated invented molecule or empty
+geometry as a general reference payload. Synthetic embeddings must be labeled
+as test data. Keep routine tests offline and independent of model weights.
+
 ## Verification and maintenance
 
 Run `uv sync --locked --dev` to prepare the environment. After documentation

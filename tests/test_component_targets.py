@@ -3,6 +3,7 @@ import hashlib
 
 import numpy as np
 import pytest
+from standard_target import standard_expected
 
 from cryoflake.constants import AnchorKind, NodeKind, PolymerKind
 from cryoflake.targets import components, schema
@@ -152,6 +153,64 @@ def _build(path, **kwargs):
         grid_shape=(20, 20, 20),
         **kwargs,
     )
+
+
+def test_build_component_targets_recovers_real_7ae1_ions_cluster_and_interfaces(
+    standard_structure_path, standard_artifact_mapping
+):
+    targets = standard_artifact_mapping["full_atom_targets"]
+    mask = targets["atom_mask"]
+    result = build_component_extension_targets(
+        standard_structure_path,
+        global_origin=standard_artifact_mapping["global_origin"],
+        voxel_size=standard_artifact_mapping["voxel_size"],
+        grid_shape=standard_artifact_mapping["density_grid"].shape,
+        polymer_atom_positions=targets["atom_positions"][mask],
+        polymer_atom_node_indices=np.nonzero(mask)[0],
+        polymer_chain_indices=targets["chain_index"],
+        polymer_residue_indices=targets["residue_index"],
+        polymer_aatype=targets["aatype"],
+    )
+    component = result["component"]
+    expected = standard_expected()
+    assert result["schema_version"] == 1
+    assert len(component["positions"]) == expected["component_nodes"] == 9
+    assert component["component_id"].tolist() == ["ZN"] * 7 + ["SF4", "MG"]
+    assert component["node_kind"].tolist() == [int(NodeKind.ION)] * 7 + [
+        int(NodeKind.NON_POLYMER),
+        int(NodeKind.ION),
+    ]
+    assert (component["atom_names"] != "").sum(axis=1).tolist() == [1] * 7 + [8, 1]
+    assert (
+        int(np.count_nonzero(component["atom_names"] != ""))
+        == expected["component_atom_count"]
+    )
+    np.testing.assert_array_equal(
+        component["positions"][0],
+        np.asarray([198.726, 155.234, 195.417], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        component["positions"][-1],
+        np.asarray([175.353, 165.911, 152.429], dtype=np.float32),
+    )
+    assert np.any(component["reference_local_positions"][7] != 0)
+    assert component["interface_group_id"].tolist() == [
+        "ZN|55f867cb5b4d421e",
+        "ZN|79e030771e58759b",
+        "ZN|c1d9dfd5dc23f3ed",
+        "ZN|4da705497e704cf2",
+        "ZN|65f912b955d4ed7d",
+        "ZN|30a69ffa40103cb3",
+        "ZN|0a8e5519b9837b2b",
+        "SF4|aac4bd62fec34823",
+        "MG|deb4a608147bcf00",
+    ]
+    np.testing.assert_array_equal(
+        component["proposal_targets"]["node_indices"], np.arange(9)
+    )
+    assert component["proposal_targets"]["valid_mask"].all()
+    assert not {"atom_mask", "interface_mask", "split_groups"}.intersection(component)
+    assert set(component["proposal_targets"]) == {"node_indices", "valid_mask"}
 
 
 @pytest.mark.parametrize("field", ["positions", "atom_positions", "b_factors"])
@@ -637,11 +696,9 @@ def test_component_proposals_reject_removed_duplicate_positions(
 
 
 def test_component_atom_presence_uses_normalized_names_and_preserves_atom_values(
-    tmp_path,
+    standard_artifact_mapping,
 ):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+    targets = standard_artifact_mapping["extension_targets"]
     expected = copy.deepcopy(targets["component"])
     component = targets["component"]
     for field in ("atom_names", "atom_elements"):
@@ -662,7 +719,7 @@ def test_component_atom_presence_uses_normalized_names_and_preserves_atom_values
         "reference_local_positions",
     ):
         np.testing.assert_array_equal(normalized[field], expected[field])
-    assert (normalized["atom_names"] != "").sum(axis=1).tolist() == [3, 2, 1, 1, 2]
+    assert (normalized["atom_names"] != "").sum(axis=1).tolist() == [1] * 7 + [8, 1]
     assert not {"atom_mask", "interface_mask", "split_groups"}.intersection(normalized)
 
 
@@ -713,10 +770,11 @@ def test_component_names_define_only_valid_padded_atom_dimensions(tmp_path, name
         validate_component_extension_targets(targets)
 
 
-def test_component_proposal_subset_order_and_custom_validity_are_preserved(tmp_path):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+def test_component_proposal_subset_order_and_custom_validity_are_preserved(
+    standard_artifact_mapping,
+):
+    targets = standard_artifact_mapping["extension_targets"]
+    expected_positions = targets["component"]["positions"][[2, 0]].copy()
     targets["component"]["proposal_targets"] = {
         "node_indices": np.asarray([2, 0], dtype=np.int32),
         # Intentionally differs from geometric grid validity for these anchors.
@@ -730,20 +788,20 @@ def test_component_proposal_subset_order_and_custom_validity_are_preserved(tmp_p
     assert proposals["node_indices"].tolist() == [2, 0]
     assert proposals["valid_mask"].tolist() == [True, False]
     np.testing.assert_array_equal(
-        normalized["positions"][proposals["node_indices"]], [[25, 0, 0], [11, 0, 0]]
+        normalized["positions"][proposals["node_indices"]], expected_positions
     )
 
 
-def test_component_proposals_allow_an_empty_subset_of_nonempty_components(tmp_path):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+def test_component_proposals_allow_an_empty_subset_of_nonempty_components(
+    standard_artifact_mapping,
+):
+    targets = standard_artifact_mapping["extension_targets"]
     targets["component"]["proposal_targets"] = {
         "node_indices": np.empty(0, dtype=np.int64),
         "valid_mask": np.empty(0, dtype=bool),
     }
     normalized = validate_component_extension_targets(targets)["component"]
-    assert len(normalized["positions"]) == 5
+    assert len(normalized["positions"]) == standard_expected()["component_nodes"]
     assert normalized["proposal_targets"]["node_indices"].shape == (0,)
     assert normalized["proposal_targets"]["valid_mask"].shape == (0,)
 
@@ -851,11 +909,9 @@ def test_deduplicated_component_payload_rejects_unsupported_schema_versions(
 @pytest.mark.parametrize("invalid_value", [None, 7, 1.5, True])
 @pytest.mark.parametrize("container", ["object_array", "list"])
 def test_component_string_fields_reject_nonstrings_without_coercion(
-    tmp_path, field, invalid_value, container
+    standard_artifact_mapping, field, invalid_value, container
 ):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+    targets = standard_artifact_mapping["extension_targets"]
     values = targets["component"][field].astype(object)
     values.flat[0] = invalid_value
     targets["component"][field] = values.tolist() if container == "list" else values
@@ -865,10 +921,8 @@ def test_component_string_fields_reject_nonstrings_without_coercion(
 
 
 @pytest.mark.parametrize("field", ["atom_names", "atom_elements", "instance_id"])
-def test_component_string_fields_reject_invalid_utf8(tmp_path, field):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+def test_component_string_fields_reject_invalid_utf8(standard_artifact_mapping, field):
+    targets = standard_artifact_mapping["extension_targets"]
     values = targets["component"][field].astype(object)
     values.flat[0] = b"\xff"
     targets["component"][field] = values
@@ -877,10 +931,10 @@ def test_component_string_fields_reject_invalid_utf8(tmp_path, field):
         validate_component_extension_targets(targets)
 
 
-def test_component_strings_decode_utf8_and_preserve_normalized_width(tmp_path):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+def test_component_strings_decode_utf8_and_preserve_normalized_width(
+    standard_artifact_mapping,
+):
+    targets = standard_artifact_mapping["extension_targets"]
     component = targets["component"]
     expected = copy.deepcopy(component)
     for field in (
@@ -899,6 +953,9 @@ def test_component_strings_decode_utf8_and_preserve_normalized_width(tmp_path):
     component["component_id"][1] = " ß ".encode()
     component["atom_names"][1, 0] = " straße ".encode()
     component["instance_id"][1] = "Identität".encode()
+    # This deliberate string-normalization probe changes a component identity,
+    # so remove its old interface ID rather than asserting a false prefix.
+    component["interface_group_id"][1] = b""
     normalized = validate_component_extension_targets(targets)["component"]
     assert normalized["component_id"][1] == "SS"
     assert normalized["atom_names"][1, 0] == "STRASSE"
@@ -908,29 +965,23 @@ def test_component_strings_decode_utf8_and_preserve_normalized_width(tmp_path):
     assert normalized["atom_names"].dtype.kind == "U"
 
 
-def test_component_interface_ids_strip_before_presence_and_format_checks(tmp_path):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+def test_component_interface_ids_strip_before_presence_and_format_checks(
+    standard_artifact_mapping,
+):
+    targets = standard_artifact_mapping["extension_targets"]
     component = targets["component"]
-    component["interface_group_id"] = np.asarray(
-        ["\t ", " LIG|0123456789abcdef\n", "", " ", ""], dtype=object
-    )
+    node_count = len(component["positions"])
+    component["interface_group_id"] = np.full(node_count, "\t ", dtype=object)
+    component["interface_group_id"][1] = " ZN|0123456789abcdef\n"
     normalized = validate_component_extension_targets(targets)["component"]
-    assert normalized["interface_group_id"].tolist() == [
-        "",
-        "LIG|0123456789abcdef",
-        "",
-        "",
-        "",
-    ]
-    assert (normalized["interface_group_id"] != "").tolist() == [
-        False,
-        True,
-        False,
-        False,
-        False,
-    ]
+    expected_ids = [""] * node_count
+    expected_ids[1] = "ZN|0123456789abcdef"
+    assert normalized["interface_group_id"].tolist() == expected_ids
+    expected_presence = np.zeros(node_count, dtype=bool)
+    expected_presence[1] = True
+    np.testing.assert_array_equal(
+        normalized["interface_group_id"] != "", expected_presence
+    )
 
 
 def _polymer_context():
@@ -1013,11 +1064,9 @@ def test_component_builder_rejects_origin_that_overflows_float32(tmp_path):
 
 
 def test_component_numeric_validation_reuses_arrays_and_scans_each_once(
-    tmp_path, monkeypatch
+    standard_artifact_mapping, monkeypatch
 ):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
+    targets = standard_artifact_mapping["extension_targets"]
     checked = []
     finite = schema.array_all_finite
 

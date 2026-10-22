@@ -17,109 +17,27 @@ from types import ModuleType
 
 import numpy as np
 import pytest
+from standard_target import (
+    load_standard_artifact_mapping,
+    load_standard_full_atom_targets,
+    standard_expected,
+    write_standard_structure,
+)
 from typer.testing import CliRunner
 
 from cryoflake.cli import app
-from cryoflake.constants import (
-    FULL_ATOM_COUNT,
-    FULL_ATOM_TARGET_SCHEMA_VERSION,
-    RIGID_GROUP_COUNT,
-    TORSION_COUNT,
-)
-from cryoflake.io.mrc import (
-    load_mrc,
-    normalized_grid_size,
-    rescale_real,
-    save_mrc,
-)
+from cryoflake.io.mrc import load_mrc, save_mrc
 from cryoflake.io.structure import load_full_backbone_from_structure
 from cryoflake.manifests import download, manifest
+from cryoflake.preprocess import worker
+from cryoflake.preprocess.memory_guard import estimate_preprocess_memory_or_none
 from cryoflake.storage import transports
 from cryoflake.storage.store import write_preprocessed_artifact
 from cryoflake.targets.components import build_component_extension_targets
-from cryoflake.targets.full_atom import validate_full_atom_targets
+
+EXPECTED = standard_expected()
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_CIF = """data_documentation
-loop_
-_entity.id
-_entity.type
-1 polymer
-2 polymer
-3 non-polymer
-loop_
-_entity_poly.entity_id
-_entity_poly.type
-1 polypeptide(L)
-2 polydeoxyribonucleotide
-loop_
-_chem_comp.id
-_chem_comp.type
-ALA 'L-PEPTIDE LINKING'
-DA 'DNA LINKING'
-{ligand} 'NON-POLYMER'
-loop_
-_atom_site.group_PDB
-_atom_site.label_atom_id
-_atom_site.label_alt_id
-_atom_site.label_comp_id
-_atom_site.label_asym_id
-_atom_site.label_entity_id
-_atom_site.label_seq_id
-_atom_site.auth_asym_id
-_atom_site.auth_seq_id
-_atom_site.pdbx_PDB_ins_code
-_atom_site.pdbx_PDB_model_num
-_atom_site.type_symbol
-_atom_site.occupancy
-_atom_site.B_iso_or_equiv
-_atom_site.Cartn_x
-_atom_site.Cartn_y
-_atom_site.Cartn_z
-ATOM N . ALA A 1 1 A 10 ? 1 N 1.0 20.0 1.0 0.0 1.0
-ATOM CA . ALA A 1 1 A 10 ? 1 C 1.0 20.0 1.0 1.0 1.0
-ATOM C . ALA A 1 1 A 10 ? 1 C 1.0 20.0 2.0 1.0 1.0
-ATOM O . ALA A 1 1 A 10 ? 1 O 1.0 20.0 2.0 2.0 1.0
-ATOM P . DA B 2 1 B 20 ? 1 P 1.0 20.0 2.0 2.0 2.0
-HETATM C1 . {ligand} C 3 . C 30 ? 1 C 1.0 20.0 1.5 1.0 1.0
-HETATM O1 . {ligand} C 3 . C 30 ? 1 O 1.0 20.0 1.5 2.0 1.0
-"""
-
-
-def _full_atom_targets():
-    """Label both nodes and explicitly mask unavailable detailed geometry."""
-    targets = {
-        "schema_version": FULL_ATOM_TARGET_SCHEMA_VERSION,
-        "aatype": np.asarray([0, 24], dtype=np.int64),
-        "chain_index": np.asarray([0, 1], dtype=np.int64),
-        "residue_index": np.asarray([10, 20], dtype=np.int64),
-        # Synthetic adapter table for this fixture, including masked slots.
-        "atom_names": np.asarray(
-            ["N", "CA", "C", "O", "P"]
-            + [f"SLOT_{slot}" for slot in range(5, FULL_ATOM_COUNT)],
-            dtype=str,
-        ),
-    }
-    shapes = {
-        "atom_positions": (FULL_ATOM_COUNT, 3),
-        "atom_mask": (FULL_ATOM_COUNT,),
-        "b_factors": (FULL_ATOM_COUNT,),
-        "rigidgroups_gt_frames": (RIGID_GROUP_COUNT, 3, 4),
-        "rigidgroups_gt_exists": (RIGID_GROUP_COUNT,),
-        "rigidgroups_group_exists": (RIGID_GROUP_COUNT,),
-        "rigidgroups_group_is_ambiguous": (RIGID_GROUP_COUNT,),
-        "rigidgroups_alt_gt_frames": (RIGID_GROUP_COUNT, 3, 4),
-        "torsion_angles_sin_cos": (TORSION_COUNT, 2),
-        "alt_torsion_angles_sin_cos": (TORSION_COUNT, 2),
-        "torsion_angles_mask": (TORSION_COUNT,),
-    }
-    targets.update(
-        {
-            name: np.zeros((2, *shape), dtype=np.float32)
-            for name, shape in shapes.items()
-        }
-    )
-    return validate_full_atom_targets(targets, num_protein=1, num_nucleotide=1)
 
 
 class _MissingObject(Exception):
@@ -190,30 +108,31 @@ class _DocWorkspace:
             )
         return result
 
-    def _payload(self, mrc_path, structure_path, voxel_size, cutoff):
+    def _payload(self, mrc_path, structure_path, target_voxel_size, cutoff):
+        # The injected documentation adapter records the requested spacing but
+        # retains the compact fixture's real sampling; resampling has separate
+        # primitive coverage and must not expand every guide case to 352 cubed.
         volume = load_mrc(mrc_path)
-        grid = volume.grid
-        if voxel_size != volume.voxel_size:
-            size = normalized_grid_size(len(grid), volume.voxel_size, voxel_size)
-            grid = rescale_real(grid, size).astype(np.float32)
         coordinates, residue_info = load_full_backbone_from_structure(structure_path)
-        full_atom_targets = _full_atom_targets()
+        full_atom_targets = load_standard_full_atom_targets()
+        atom_mask = full_atom_targets["atom_mask"]
+        node_indices = np.broadcast_to(
+            np.arange(len(atom_mask))[:, None], atom_mask.shape
+        )[atom_mask]
         return {
-            "density_grid": grid,
+            "density_grid": volume.grid,
             "global_origin": volume.global_origin,
-            "voxel_size": voxel_size,
+            "voxel_size": volume.voxel_size,
             "backbone_coordinates": coordinates,
             "residue_info": residue_info,
             "full_atom_targets": full_atom_targets,
             "extension_targets": build_component_extension_targets(
                 structure_path,
                 global_origin=volume.global_origin,
-                voxel_size=voxel_size,
-                grid_shape=grid.shape,
-                polymer_atom_positions=np.concatenate(
-                    (coordinates["CA"], coordinates["P"])
-                ),
-                polymer_atom_node_indices=np.arange(2, dtype=np.int64),
+                voxel_size=volume.voxel_size,
+                grid_shape=volume.grid.shape,
+                polymer_atom_positions=full_atom_targets["atom_positions"][atom_mask],
+                polymer_atom_node_indices=node_indices,
                 polymer_chain_indices=full_atom_targets["chain_index"],
                 polymer_residue_indices=full_atom_targets["residue_index"],
                 polymer_aatype=full_atom_targets["aatype"],
@@ -277,20 +196,34 @@ class _DocWorkspace:
         for source in sorted(Path(structures_dir).glob("*.cif")):
             np.savez(
                 output / f"{source.stem}.npz",
-                sequence=np.ones((2, 8), dtype=np.float32),
-                sequence_mask=np.ones(2, dtype=np.bool_),
+                sequence=np.ones(
+                    (EXPECTED["full_atom_residue_count"], 8), dtype=np.float32
+                ),
+                sequence_mask=np.ones(
+                    EXPECTED["full_atom_residue_count"], dtype=np.bool_
+                ),
             )
 
-    def seed_training(self, artifact_reference, *, include_sequence=True):
-        payload = self._payload(
-            self.root / "data/map.mrc", self.root / "data/model.cif", 1.0, 5.0
-        )
+    def seed_training(self, artifact_reference, *, include_sequence=False):
+        payload = load_standard_artifact_mapping()
         if include_sequence:
+            # Synthetic embeddings exist only in explicit sequence scenarios.
+            residue_count = EXPECTED["full_atom_residue_count"]
             payload.update(
-                sequence=np.ones((2, 8), dtype=np.float32),
-                sequence_mask=np.ones(2, dtype=np.bool_),
+                sequence=np.ones((residue_count, 8), dtype=np.float32),
+                sequence_mask=np.ones(residue_count, dtype=np.bool_),
             )
         return write_preprocessed_artifact(artifact_reference, payload)
+
+    def use_independent_component_groups(self):
+        # Two explicitly filtered copies of 7AE1 exercise grouped splitting;
+        # placeholder route names do not identify additional depositions.
+        write_standard_structure(
+            self.root / "data/structures/1abc.cif", component_ids={"ZN"}
+        )
+        write_standard_structure(
+            self.root / "data/structures/2def.cif", component_ids={"SF4"}
+        )
 
     def prepare_manifest(self):
         output = self.root / "data/manifest.csv"
@@ -353,6 +286,16 @@ def doc_workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(download, "urlopen", workspace.urlopen)
     monkeypatch.setattr(manifest, "urlopen", workspace.urlopen)
 
+    def estimate_documentation_workload(map_path, target_voxel_size):
+        # Match the injected adapter's retained sampling rather than estimating
+        # an interpolation the test double does not perform. Admission and
+        # release continue through the real worker memory guard.
+        return estimate_preprocess_memory_or_none(map_path, EXPECTED["voxel_size"])
+
+    monkeypatch.setattr(
+        worker, "estimate_preprocess_memory_or_none", estimate_documentation_workload
+    )
+
     parent = ModuleType("my_app")
     parent.__path__ = []
     adapter = ModuleType("my_app.preprocess")
@@ -370,16 +313,19 @@ def doc_workspace(tmp_path, monkeypatch):
     (data / "source.csv").write_text(
         "EMD-,Associated PDB,resolution\nEMD-1234,1ABC,3.2\nEMD-5678,2DEF,2.8\n"
     )
+    standard = load_standard_artifact_mapping()
     save_mrc(
-        np.arange(64, dtype=np.float32).reshape(4, 4, 4),
-        1.0,
-        np.zeros(3, dtype=np.float32),
+        standard["density_grid"],
+        standard["voxel_size"],
+        standard["global_origin"],
         data / "map.mrc",
     )
-    (data / "model.cif").write_text(_CIF.format(ligand="LIG"))
-    for emdb_id, pdb_id, ligand in (("1234", "1abc", "LIG"), ("5678", "2def", "ATP")):
+    write_standard_structure(data / "model.cif")
+    # The guides keep illustrative routing IDs. Both routes use explicitly
+    # duplicated canonical inputs, without claiming two real depositions.
+    for emdb_id, pdb_id in (("1234", "1abc"), ("5678", "2def")):
         shutil.copyfile(data / "map.mrc", data / "maps" / f"emd_{emdb_id}.map")
-        (data / "structures" / f"{pdb_id}.cif").write_text(_CIF.format(ligand=ligand))
+        write_standard_structure(data / "structures" / f"{pdb_id}.cif")
     shutil.copytree(_PROJECT_ROOT / "configs", tmp_path / "configs")
     workspace.seed_training(data / "artifacts/example")
     workspace.seed_training("s3://my-bucket/artifacts/example")
