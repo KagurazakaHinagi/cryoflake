@@ -304,8 +304,22 @@ def test_structure_filters_only_genuine_components(
     assert np.all(component["interface_group_id"] != "")
     if component_ids is None:
         cached = mapping["extension_targets"]["component"]
+        assert component.keys() == cached.keys()
         for name, values in component.items():
-            if isinstance(values, np.ndarray):
+            if name == "reference_local_positions":
+                # Float32 dot products and norms can round differently across
+                # NumPy/platform implementations. Limit the allowance to four
+                # ULPs of computed local geometry; deposited values stay exact.
+                assert values.dtype == cached[name].dtype == np.float32
+                assert values.shape == cached[name].shape == (9, 3, 3)
+                np.testing.assert_array_max_ulp(values, cached[name], maxulp=4)
+            elif name == "proposal_targets":
+                assert values.keys() == cached[name].keys()
+                for proposal_name, proposal_values in values.items():
+                    np.testing.assert_array_equal(
+                        proposal_values, cached[name][proposal_name]
+                    )
+            else:
                 np.testing.assert_array_equal(values, cached[name])
 
 
