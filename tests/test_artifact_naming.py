@@ -91,7 +91,7 @@ def test_grouped_reports_use_version_three_and_artifact_group_keys(tmp_path, str
     write_grouped_split_report(result=split, split_report_path=report)
     payload = json.loads(report.read_text())
 
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == "G2610210"
     assert [row["artifact_group_id"] for row in payload["assignments"]] == [
         "1abc",
         "2def",
@@ -129,7 +129,7 @@ def test_checkpoint_roundtrips_the_artifact_group_identifier(tmp_path):
     with PreprocessCheckpoint(summary, {}) as checkpoint:
         checkpoint.record(record)
         metadata = json.loads(checkpoint.metadata_path.read_text())
-        assert metadata["format_version"] == 5
+        assert metadata["format_version"] == "C2610210"
 
     with PreprocessCheckpoint(summary, {}) as recovered:
         restored = recovered.records[1]["grouped_split_record"]
@@ -159,7 +159,7 @@ def test_version_four_checkpoint_fails_before_decoding_old_group_keys(tmp_path):
     grouped_record["example_group_id"] = grouped_record.pop("artifact_group_id")
     journal_path.write_text(json.dumps(record) + "\n")
     metadata = json.loads(metadata_path.read_text())
-    assert metadata["format_version"] == 5
+    assert metadata["format_version"] == "C2610210"
     metadata["format_version"] = 4
     metadata_path.write_text(json.dumps(metadata))
     original_metadata = metadata_path.read_bytes()

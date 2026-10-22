@@ -282,6 +282,10 @@ def regenerate(source_dir: Path, fixture_dir: Path):
             "atom_names": "nextangelo.utils.residue_constants.atom_types",
             "model_weights_used": False,
         },
+        "schema_versions": {
+            "full_atom_targets": targets["schema_version"],
+            "extension_targets": extension["schema_version"],
+        },
         "full_entry": {
             "protein_nodes": int(protein_mask.sum()),
             "nucleotide_nodes": int((~protein_mask).sum()),

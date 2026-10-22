@@ -136,9 +136,8 @@ def validate_full_atom_targets(
         raise ValueError(f"{label} is missing required target arrays.")
     schema_version = targets.get("schema_version")
     if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, (int, np.integer))
-        or int(schema_version) != constants.FULL_ATOM_TARGET_SCHEMA_VERSION
+        not isinstance(schema_version, str)
+        or schema_version != constants.FULL_ATOM_TARGET_SCHEMA_VERSION
     ):
         raise ValueError(f"{label} has unsupported full-atom schema_version.")
 

@@ -68,7 +68,7 @@ def test_full_atom_targets_follow_ca_then_p_node_order():
     ]
     assert targets["atom_names"].shape == (FULL_ATOM_COUNT,)
     assert targets["atom_names"].dtype.kind == "U"
-    assert targets["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION == 1
+    assert targets["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION == "F2610210"
     assert targets["atom_positions"].dtype == np.float32
     assert targets["atom_mask"].dtype == np.bool_
     assert int(targets["atom_mask"].sum()) == metadata["present_atom_count"]
@@ -203,7 +203,39 @@ def test_full_atom_residue_indices_do_not_wrap_uint64():
 
 
 @pytest.mark.parametrize(
-    "version", [0, 2, -1, True, False, 1.0, "1", None, np.bool_(True), np.asarray(1)]
+    "version",
+    [
+        0,
+        1,
+        2,
+        -1,
+        True,
+        False,
+        1.0,
+        "1",
+        None,
+        np.int32(1),
+        np.int64(1),
+        np.uint64(1),
+        np.bool_(True),
+        np.asarray(1),
+        "",
+        "f2610210",
+        "E2610210",
+        "F2610200",
+        "F2610211",
+        "F2610219",
+        "F26102110",
+        "F2610320",
+        "F261021",
+        "F202610210",
+        " F2610210",
+        "F2610210\n",
+        b"F2610210",
+        np.asarray("F2610210"),
+        np.asarray(["F2610210"]),
+        ["F2610210"],
+    ],
 )
 def test_full_atom_schema_version_rejects_unsupported_values(version):
     targets = extract_full_atom_targets(_target_source())
@@ -212,15 +244,15 @@ def test_full_atom_schema_version_rejects_unsupported_values(version):
         validate_full_atom_targets(targets)
 
 
-@pytest.mark.parametrize("version", [1, np.int32(1), np.int64(1), np.uint64(1)])
-def test_full_atom_schema_version_accepts_integer_scalars_and_normalizes_to_python(
+@pytest.mark.parametrize("version", ["F2610210", np.str_("F2610210")])
+def test_full_atom_schema_version_accepts_string_scalars_and_normalizes_to_python(
     version,
 ):
     targets = extract_full_atom_targets(_target_source())
     targets["schema_version"] = version
     normalized = validate_full_atom_targets(targets)
-    assert normalized["schema_version"] == 1
-    assert type(normalized["schema_version"]) is int
+    assert normalized["schema_version"] == "F2610210"
+    assert type(normalized["schema_version"]) is str
 
 
 def test_full_atom_schema_version_cannot_be_omitted():
@@ -377,7 +409,7 @@ def test_empty_full_atom_residue_groups_preserve_all_tensor_shapes():
     )
     targets = extract_full_atom_targets(empty_source)
     normalized = validate_full_atom_targets(targets, num_protein=0, num_nucleotide=0)
-    assert normalized["schema_version"] == 1
+    assert normalized["schema_version"] == "F2610210"
     assert normalized["atom_names"].shape == (65,)
     np.testing.assert_array_equal(
         normalized["atom_names"], np.char.upper(np.char.strip(source.atom_names))

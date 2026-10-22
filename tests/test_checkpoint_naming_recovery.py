@@ -297,6 +297,45 @@ def _progress_files(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "version",
+    [
+        4,
+        5,
+        5.0,
+        True,
+        None,
+        "5",
+        "",
+        "C2610211",
+        "C2610200",
+        "C2610320",
+        "C26102100",
+        "S2610210",
+        "c2610210",
+        " C2610210",
+        ["C2610210"],
+        {"version": "C2610210"},
+    ],
+)
+def test_checkpoint_rejects_legacy_or_unsupported_versions_without_mutation(
+    tmp_path, version
+):
+    summary_path, metadata_path, journal_path = _progress_files(tmp_path)
+    metadata = json.loads(metadata_path.read_text())
+    assert metadata["format_version"] == "C2610210"
+    metadata["format_version"] = version
+    metadata_path.write_text(json.dumps(metadata))
+    original_metadata = metadata_path.read_bytes()
+    original_journal = journal_path.read_bytes()
+
+    with pytest.raises(CheckpointContractMismatchError):
+        PreprocessCheckpoint(summary_path, {})
+
+    assert metadata_path.read_bytes() == original_metadata
+    assert journal_path.read_bytes() == original_journal
+
+
+@pytest.mark.parametrize(
     "change",
     [
         "duplicate_version",
@@ -311,7 +350,8 @@ def test_checkpoint_metadata_requires_unambiguous_canonical_json(tmp_path, chang
     metadata = json.loads(metadata_path.read_text())
     if change == "duplicate_version":
         serialized = json.dumps(metadata).replace(
-            '"format_version": 5', '"format_version": 4, "format_version": 5'
+            '"format_version": "C2610210"',
+            '"format_version": 5, "format_version": "C2610210"',
         )
     else:
         if change == "float_version":

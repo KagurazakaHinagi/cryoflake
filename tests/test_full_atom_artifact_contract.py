@@ -83,7 +83,7 @@ def test_storage_preserves_full_atom_names_and_their_observation_alignment(
         "dtype": expected["atom_names"].dtype.str,
         "shape": [65],
     }
-    assert metadata["format_version"] == 1
+    assert metadata["format_version"] == "N2610210"
 
     with np.load(artifact_reference / "core.npz", allow_pickle=False) as archive:
         names = archive["full_atom_targets/atom_names"]
@@ -108,7 +108,7 @@ def test_storage_preserves_full_atom_names_and_their_observation_alignment(
             restored_mapping["backbone_coordinates"][key], coordinates
         )
     loaded = restored_mapping["full_atom_targets"]
-    assert loaded["schema_version"] == 1
+    assert loaded["schema_version"] == "F2610210"
     assert loaded["atom_names"].dtype.kind == "U"
     assert loaded["atom_mask"].dtype == np.bool_
     assert loaded["atom_positions"].dtype == np.float32
@@ -304,7 +304,9 @@ def test_legacy_full_atom_payloads_are_rejected_by_reuse_and_validation(
         validate_preprocessed_artifact(artifact_reference)
 
 
-@pytest.mark.parametrize("schema_version", [0, 2, -1, True, 1.0, "1", None])
+@pytest.mark.parametrize(
+    "schema_version", [0, 1, 2, -1, True, 1.0, "1", "F2610211", "E2610210", None]
+)
 def test_unsupported_full_atom_versions_are_never_reused(
     tmp_path, standard_artifact_mapping, schema_version
 ):
@@ -376,7 +378,7 @@ def test_component_atoms_keep_their_independent_variable_width_namespace(
     _assert_redundant_target_fields_are_not_serialized(artifact_reference)
     loaded = load_preprocessed_artifact(artifact_reference)
     assert loaded["full_atom_targets"]["atom_names"].shape == (65,)
-    assert loaded["extension_targets"]["schema_version"] == 1
+    assert loaded["extension_targets"]["schema_version"] == "E2610210"
     component = loaded["extension_targets"]["component"]
     assert component["component_id"].tolist() == ["LIG"]
     assert component["atom_names"].shape == (1, 67)
@@ -453,9 +455,12 @@ def test_checkpoint_identity_includes_full_atom_schema_and_rejects_old_progress(
         download_errors={},
         preprocess_checkpoint_token="full-atom-schema-regression",
     )
-    assert contract["artifact_contract_version"] == 2
-    assert contract["format_contracts"]["targets"]["full_atom_schema_version"] == 1
-    assert contract["format_contracts"]["targets"]["schema_version"] == 1
+    assert contract["artifact_contract_version"] == "S2610210"
+    assert (
+        contract["format_contracts"]["targets"]["full_atom_schema_version"]
+        == "F2610210"
+    )
+    assert contract["format_contracts"]["targets"]["schema_version"] == "E2610210"
     target_fields = contract["target_fields"]
     assert "prot_mask" not in target_fields["full_atom_targets"]
     assert not {"atom_mask", "interface_mask", "split_groups"}.intersection(
@@ -491,8 +496,8 @@ def test_checkpoint_identity_includes_full_atom_schema_and_rejects_old_progress(
         assert checkpoint.fingerprint != current_fingerprint
     original_metadata = metadata_path.read_bytes()
     original_journal = journal_path.read_bytes()
-    assert json.loads(original_metadata)["format_version"] == 5
-    assert PREPROCESS_CHECKPOINT_FORMAT_VERSION == 5
+    assert json.loads(original_metadata)["format_version"] == "C2610210"
+    assert PREPROCESS_CHECKPOINT_FORMAT_VERSION == "C2610210"
 
     with pytest.raises(CheckpointContractMismatchError, match="does not match"):
         PreprocessCheckpoint(summary_path, contract)

@@ -12,7 +12,7 @@ from cryoflake.storage.transports import is_remote_uri
 
 GroupedSplitStrategy = Literal["component", "interface"]
 SplitAssignment = Literal["train", "valid"]
-SPLIT_REPORT_SCHEMA_VERSION = 3
+SPLIT_REPORT_SCHEMA_VERSION = "G2610210"
 _REPORT_FIELDS = {
     "schema_version",
     "split_strategy",
@@ -486,7 +486,7 @@ def _validate_split_report(
     """Check the versioned report without resolving its historical artifact paths."""
 
     if (
-        type(payload.get("schema_version")) is not int
+        type(payload.get("schema_version")) is not str
         or payload["schema_version"] != SPLIT_REPORT_SCHEMA_VERSION
     ):
         raise ValueError("Split report has an unsupported or missing schema_version")

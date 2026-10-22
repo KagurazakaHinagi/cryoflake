@@ -16,16 +16,31 @@ Choose the section for your task:
 
 | Contract | Current version | Scope |
 | --- | --- | --- |
-| Semantic preprocessing | `2` | The complete training payload and its validation rules. |
-| NPZ+JSON storage | `1` | Metadata, array stores, and storage integrity. |
-| Full-atom targets | `1` | `full_atom_targets.schema_version`. |
-| Component extension | `1` | `extension_targets.schema_version`. |
+| Semantic preprocessing | `"S2610210"` | The complete training payload and its validation rules. |
+| NPZ+JSON storage | `"N2610210"` | Metadata, array stores, and storage integrity. |
+| Full-atom targets | `"F2610210"` | `full_atom_targets.schema_version`. |
+| Component extension | `"E2610210"` | `extension_targets.schema_version`. |
+| Grouped split reports | `"G2610210"` | Split-report JSON `schema_version`. |
+| Preprocessing checkpoints | `"C2610210"` | Checkpoint metadata `format_version`. |
 
-The semantic preprocessing version describes validation rules; no
-semantic-version field is required in the payload or `metadata.json`.
-The metadata field `format_version` is the NPZ+JSON storage version `1`.
+Schema identifiers are strings in the form `PYYMMDDX`: a domain prefix, the
+release date as `YYMMDD`, and a single revision digit from `0` through `9`.
+For example, `"F2610210"` means full-atom targets released on October 21,
+2026, revision 0. Use `S` for semantic preprocessing, `N` for NPZ+JSON
+storage, `F` for full-atom targets, `E` for component extensions, `G` for
+grouped split reports, and `C` for preprocessing checkpoints. Each domain
+advances independently. Quote these identifiers in JSON, YAML, and
+Python; do not convert them to numbers.
 
-These versions describe separate contracts. The runtime descriptors are
+Readers require the exact supported identifier for each domain. A different
+prefix, date, or revision is unsupported even if it follows the naming
+pattern. Previous integer versions are rejected; there is no automatic
+conversion. The semantic preprocessing version describes validation rules;
+no semantic-version field is required in the payload or `metadata.json`.
+The metadata field `format_version` is the NPZ+JSON storage identifier
+`"N2610210"`.
+
+These identifiers describe separate contracts. The runtime descriptors are
 [artifact/npz_json.yaml](../src/cryoflake/configs/contracts/artifact/npz_json.yaml),
 [targets/component.yaml](../src/cryoflake/configs/contracts/targets/component.yaml),
 and [manifest/emdb.yaml](../src/cryoflake/configs/contracts/manifest/emdb.yaml).
@@ -155,13 +170,13 @@ See [`metadata.py`](../src/cryoflake/metadata.py),
 corresponding backbone coordinate arrays. It also contains one shared
 `atom_names` table for all 65 slots.
 
-`schema_version` must be the integer `1`; missing or unsupported versions,
-booleans, and floats are rejected. Import `FULL_ATOM_TARGET_SCHEMA_VERSION`
-from `cryoflake` or `cryoflake.constants` when producing this mapping.
+`schema_version` must be the string `"F2610210"`; missing or unsupported
+identifiers and non-string values are rejected. Import
+`FULL_ATOM_TARGET_SCHEMA_VERSION` from `cryoflake` or `cryoflake.constants` when producing this mapping.
 
 | Field | Shape/value | Normalized dtype |
 | --- | --- | --- |
-| `schema_version` | Scalar | `int` |
+| `schema_version` | Scalar | `str` |
 | `aatype` | `(R,)` | `int64` |
 | `chain_index` | `(R,)` | `int64` |
 | `residue_index` | `(R,)` | `int64` |
@@ -247,6 +262,7 @@ artifact_mapping["full_atom_targets"] = targets
 write_preprocessed_artifact("data/artifacts/named-roundtrip", artifact_mapping)
 restored = load_preprocessed_artifact("data/artifacts/named-roundtrip")
 restored_targets = restored["full_atom_targets"]
+assert restored_targets["schema_version"] == "F2610210"
 np.testing.assert_array_equal(restored_targets["atom_names"], targets["atom_names"])
 protein_mask = (restored_targets["aatype"] < 20) | (restored_targets["aatype"] == 28)
 
@@ -269,12 +285,12 @@ for row in range(len(restored_targets["aatype"])):
     )
 ```
 
-### Component extension, schema version 1
+### Component extension
 
-`extension_targets` has exactly two keys: integer `schema_version: 1` and
-`component`. Boolean versions, unsupported versions, missing keys, and extra
-keys are rejected. The component mapping must contain exactly the fields in
-the following table.
+`extension_targets` has exactly two keys: string `schema_version: "E2610210"`
+and `component`. Non-string or unsupported identifiers, missing keys, and
+extra keys are rejected. The component mapping must contain exactly the
+fields in the following table.
 
 Components describe nodes outside the canonical backbone residue-label sets.
 They have their own padded `(N, A)` atom names and elements; the shared
@@ -570,12 +586,12 @@ out, so they may also appear in training. Grouped splitting requires at least
 two records and enough independent groups to leave both outputs nonempty.
 
 `holdout_group_ids_path` accepts one nonempty group ID per line, a JSON string
-list, or a version-3 grouped split report. IDs are stripped, deduplicated, and
+list, or a `"G2610210"` grouped split report. IDs are stripped, deduplicated, and
 sorted. An explicit selection must be nonempty and contain only known IDs.
 A report used as input must declare a matching `component` or `interface`
 strategy.
 
-Report inputs must contain the complete version-3 schema below. Missing or
+Report inputs must contain the complete `"G2610210"` schema below. Missing or
 unexpected fields, duplicate JSON keys, nonfinite JSON numbers, invalid scalar
 or list types, inconsistent counts or row order, and conflicting holdout or
 atomic-peer assignments are rejected. Historical artifact references are not
@@ -587,7 +603,7 @@ inputs remain available when only group IDs are needed.
 
 | Field | Value |
 | --- | --- |
-| `schema_version` | `3` |
+| `schema_version` | String `"G2610210"`. |
 | `split_strategy` | `"component"` or `"interface"` |
 | `validation_fraction`, `seed` | Requested fraction and deterministic seed. |
 | `selected_holdout_group_ids` | Sorted list of selected IDs; reusable as a holdout input. |
@@ -655,14 +671,14 @@ it. All cells are text; missing/not-applicable values are empty.
 
 Only successful artifacts enter artifact lists. Checkpoint journals beside
 the summary hold recovery state; they are not a dataset interchange format.
-Checkpoint metadata uses `format_version: 5`. Serialized grouped split records
-use `artifact_reference` and `artifact_group_id`. An unsupported checkpoint
-version requires an explicit reset before starting a new journal.
+Checkpoint metadata uses `format_version: "C2610210"`. Serialized grouped
+split records use `artifact_reference` and `artifact_group_id`. An unsupported
+checkpoint version requires an explicit reset before starting a new journal.
 
 The checkpoint run identity includes a `target_fields` descriptor containing
 the canonical full-atom, component, and nested proposal field sets. A
 checkpoint from a different target layout requires an explicit reset even
-when the schema version numbers are unchanged.
+when the schema identifiers are unchanged.
 
 Recovery validates each row's canonical group record and agreement between
 its artifact, target, summary, and grouped-record references before resuming

@@ -23,7 +23,7 @@ from cryoflake.storage.transports import (
 )
 from cryoflake.targets.schema import _COMPONENT_KEYS, _PROPOSAL_KEYS
 
-PREPROCESSED_ARTIFACT_CONTRACT_VERSION = 2
+PREPROCESSED_ARTIFACT_CONTRACT_VERSION = "S2610210"
 
 
 def manifest_source_identity(

@@ -1,6 +1,6 @@
 # Canonical cryoFlake artifact identifiers.
 format_name: cryoflake-preprocessed
-format_version: 1
+format_version: "N2610210"
 generation_key: __cryoflake_store_generation__
 metadata_file_name: metadata.json
 core_file_name: core.npz

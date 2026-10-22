@@ -175,6 +175,12 @@ def test_standard_mapping_retains_real_density_and_geometry(standard_artifact_ma
     )
     assert float(density[32, 32, 32]) == 0.00788439903408289
     targets = mapping["full_atom_targets"]
+    assert targets["schema_version"] == "F2610210"
+    assert mapping["extension_targets"]["schema_version"] == "E2610210"
+    assert provenance["schema_versions"] == {
+        "full_atom_targets": targets["schema_version"],
+        "extension_targets": mapping["extension_targets"]["schema_version"],
+    }
     assert targets["atom_positions"].shape == (189, 65, 3)
     assert targets["atom_names"].shape == (65,)
     assert targets["atom_names"][:5].tolist() == ["N", "CA", "C", "O", "CB"]
@@ -231,7 +237,7 @@ def test_compact_selection_and_caches_are_exact_subsets():
         raw = {name: archive[name] for name in archive.files}
     for name, array in targets.items():
         if name == "schema_version":
-            assert array == 1
+            assert array == "F2610210"
             continue
         expected = raw[name] if name == "atom_names" else raw[name][rows]
         np.testing.assert_array_equal(array, expected.astype(array.dtype))

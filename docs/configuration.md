@@ -244,10 +244,13 @@ their identities, versions, filenames, marker, metadata limit, or target
 dimensions are rejected. Supporting another wire format requires code changes.
 Use the [artifact](artifact-format.md) and [data](data-contracts.md) references
 to interpret these descriptors.
-The packaged `contracts/targets: component` group retains component
-`schema_version: 1` and separately declares `full_atom_schema_version: 1`.
-Both versions describe fixed supported schemas; overriding either version is
-rejected.
+The packaged `contracts/targets: component` group declares component
+`schema_version: "E2610210"` and `full_atom_schema_version: "F2610210"`.
+The `contracts/artifact: npz_json` group declares
+`format_version: "N2610210"`. These are strings with independent domain
+prefixes, release dates, and revision digits, as described in the
+[data contracts](data-contracts.md). They identify fixed supported schemas;
+overriding them with a different identifier or a numeric value is rejected.
 
 Source/output CSVs, summaries, lists, reports, holdout inputs, and checkpoint
 sidecars must use distinct files, including symlink and existing hardlink

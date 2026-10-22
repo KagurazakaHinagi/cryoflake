@@ -329,7 +329,7 @@ A summary path enables sibling files `<summary>.checkpoint.json`,
 `<summary>.checkpoint.jsonl`, and `<summary>.checkpoint.lock`. Ownership
 requires POSIX `fcntl` locks; two processes cannot own the same journal. The
 lock file remains after completion, so its existence alone does not indicate
-an active run. Checkpoint metadata uses format version `5`. Use
+an active run. Checkpoint metadata uses format version `"C2610210"`. Use
 `--reset-preprocess-checkpoint` to start a new journal when the stored version
 differs.
 

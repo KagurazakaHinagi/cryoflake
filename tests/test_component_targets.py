@@ -173,7 +173,7 @@ def test_build_component_targets_recovers_real_7ae1_ions_cluster_and_interfaces(
     )
     component = result["component"]
     expected = standard_expected()
-    assert result["schema_version"] == 1
+    assert result["schema_version"] == "E2610210"
     assert len(component["positions"]) == expected["component_nodes"] == 9
     assert component["component_id"].tolist() == ["ZN"] * 7 + ["SF4", "MG"]
     assert component["node_kind"].tolist() == [int(NodeKind.ION)] * 7 + [
@@ -878,19 +878,64 @@ def test_component_interface_presence_is_fully_defined_by_group_id(tmp_path):
     assert "interface_mask" not in normalized
 
 
-@pytest.mark.parametrize("schema_version", [0, 2, True, 1.0, "1", None])
+@pytest.mark.parametrize(
+    "schema_version",
+    [
+        0,
+        1,
+        2,
+        -1,
+        True,
+        False,
+        1.0,
+        "1",
+        None,
+        np.int32(1),
+        np.int64(1),
+        np.uint64(1),
+        np.bool_(True),
+        np.asarray(1),
+        "",
+        "e2610210",
+        "F2610210",
+        "E2610200",
+        "E2610211",
+        "E2610219",
+        "E26102110",
+        "E2610320",
+        "E261021",
+        "E202610210",
+        " E2610210",
+        "E2610210\n",
+        b"E2610210",
+        np.asarray("E2610210"),
+        np.asarray(["E2610210"]),
+        ["E2610210"],
+    ],
+)
 def test_deduplicated_component_payload_rejects_unsupported_schema_versions(
-    tmp_path, schema_version
+    standard_artifact_mapping, schema_version
 ):
-    structure_path = tmp_path / "mixed.cif"
-    _write_mixed_cif(structure_path)
-    targets = _build(structure_path)
-    assert targets["schema_version"] == 1
+    targets = standard_artifact_mapping["extension_targets"]
+    assert targets["schema_version"] == "E2610210"
     targets["schema_version"] = schema_version
     with pytest.raises(
         ValueError, match="unsupported component extension schema_version"
     ):
         validate_component_extension_targets(targets)
+
+
+@pytest.mark.parametrize("version", ["E2610210", np.str_("E2610210")])
+def test_component_schema_version_accepts_string_scalars_and_normalizes_to_python(
+    standard_artifact_mapping, version
+):
+    targets = standard_artifact_mapping["extension_targets"]
+    targets["schema_version"] = version
+
+    normalized = validate_component_extension_targets(targets)
+
+    assert normalized["schema_version"] == "E2610210"
+    assert type(normalized["schema_version"]) is str
 
 
 @pytest.mark.parametrize(

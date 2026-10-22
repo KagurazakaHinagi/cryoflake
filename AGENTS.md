@@ -54,6 +54,13 @@ errors, tests, and documentation.
 - Review schema versions and checkpoint identities when serialized names or
   their meanings change. Add regression tests proving removed names and
   unsupported versions are rejected.
+- Schema identifiers use quoted `PYYMMDDX` strings: release date `YYMMDD` and
+  revision `X` from 0 through 9. Prefixes are `S` for semantic preprocessing,
+  `N` for NPZ+JSON storage, `F` for full-atom targets, `E` for component
+  extensions, `G` for grouped split reports, and `C` for preprocessing
+  checkpoints. Each domain advances independently; accept only its exact
+  supported identifier and reject numeric legacy versions. Ask the user
+  before changing a contract identifier in future work.
 
 ## Documentation changes require CI test coverage
 

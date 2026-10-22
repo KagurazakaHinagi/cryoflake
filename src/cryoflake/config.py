@@ -27,7 +27,7 @@ from cryoflake.common import paths_must_be_distinct
 @dataclass
 class ArtifactContract:
     format_name: str = "cryoflake-preprocessed"
-    format_version: int = 1
+    format_version: str = "N2610210"
     generation_key: str = "__cryoflake_store_generation__"
     metadata_file_name: str = "metadata.json"
     core_file_name: str = "core.npz"
@@ -37,8 +37,8 @@ class ArtifactContract:
 
 @dataclass
 class TargetContract:
-    schema_version: int = 1
-    full_atom_schema_version: int = 1
+    schema_version: str = "E2610210"
+    full_atom_schema_version: str = "F2610210"
     full_atom_count: int = 65
     rigid_group_count: int = 9
     torsion_count: int = 8
@@ -192,8 +192,26 @@ def compose_config(
             if isinstance(OmegaConf.select(composed, f"pipeline.{name}"), bool):
                 raise ValueError(f"pipeline.{name} must be an integer, not a boolean")
         for section, names in (
-            ("artifact", ("format_version", "max_metadata_bytes")),
-            ("targets", tuple(TargetContract.__dataclass_fields__)),
+            ("artifact", ("format_version",)),
+            ("targets", ("schema_version", "full_atom_schema_version")),
+        ):
+            for name in names:
+                if not isinstance(
+                    OmegaConf.select(composed, f"contracts.{section}.{name}"), str
+                ):
+                    raise ValueError(
+                        f"contracts.{section}.{name} must be a schema version string"
+                    )
+        for section, names in (
+            ("artifact", ("max_metadata_bytes",)),
+            (
+                "targets",
+                tuple(
+                    name
+                    for name in TargetContract.__dataclass_fields__
+                    if name not in {"schema_version", "full_atom_schema_version"}
+                ),
+            ),
         ):
             for name in names:
                 if isinstance(

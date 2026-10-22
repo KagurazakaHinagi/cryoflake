@@ -34,6 +34,9 @@ provenance. Geometry arrays are selected from the complete-entry calculation;
 they are not recomputed using the discontinuous subset as a new chain.
 Values undergo only cryoFlake's documented numeric normalization. No fabricated
 slot names, zero-filled replacement frames, or synthetic coordinates are used.
+The compact target schema labels are `F2610210` for full-atom targets and
+`E2610210` for component extensions; changing these labels preserves every
+scientific array. Regeneration writes the currently supported identifiers.
 Sequence embeddings are absent. Tests of embedding behavior explicitly add
 their own small numerical inputs.
 
@@ -66,7 +69,7 @@ are recorded in `provenance.json`.
 - `full_entry_targets.npz`: unchanged authentic extraction bridge for one
   complete-entry alignment/storage regression; no model checkpoint or weights.
 
-Binary assets occupy 5,433,098 bytes in total, below 6 MB. The original 336³
+Binary assets occupy 5,433,122 bytes in total, below 6 MB. The original 336³
 map is not bundled. The shared helper is `tests/standard_target.py`; it returns
 fresh mutable mappings and can write either the compact or full-entry CIF.
 Optional `component_ids` filtering keeps all real compact polymer rows while

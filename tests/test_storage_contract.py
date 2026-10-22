@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import io
 import json
 
 import numpy as np
 import pytest
 
 from cryoflake.common import sha256_file
-from cryoflake.storage.codec import FORMAT_NAME, STORE_GENERATION_KEY
+from cryoflake.storage import transports
+from cryoflake.storage.codec import (
+    FORMAT_NAME,
+    FORMAT_VERSION,
+    STORE_GENERATION_KEY,
+    read_metadata,
+)
 from cryoflake.storage.store import (
     load_preprocessed_artifact,
+    preprocessed_artifact_exists,
     replace_preprocessed_artifact_sequence,
     write_preprocessed_artifact,
 )
@@ -29,6 +37,7 @@ def test_artifacts_use_canonical_wire_identifiers(tmp_path):
     write_preprocessed_artifact(root, {"array": np.arange(4)})
     metadata = json.loads((root / "metadata.json").read_text())
     assert FORMAT_NAME == metadata["format"] == "cryoflake-preprocessed"
+    assert FORMAT_VERSION == metadata["format_version"] == "N2610210"
     assert STORE_GENERATION_KEY == "__cryoflake_store_generation__"
     with np.load(root / "core.npz", allow_pickle=False) as archive:
         assert set(archive.files) == {"array", STORE_GENERATION_KEY}
@@ -86,6 +95,7 @@ def test_sequence_replacement_preserves_canonical_core_and_identifiers(tmp_path)
     assert (root / "core.npz").read_bytes() == core
     metadata = json.loads((root / "metadata.json").read_text())
     assert metadata["format"] == FORMAT_NAME
+    assert metadata["format_version"] == "N2610210"
     with np.load(root / "sequence.npz", allow_pickle=False) as archive:
         assert set(archive.files) == {"sequence", "sequence_mask", STORE_GENERATION_KEY}
     loaded = load_preprocessed_artifact(root)
@@ -146,3 +156,89 @@ def test_unsupported_metadata_formats_fail_closed(tmp_path, validator, format_na
     metadata_path.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match=r"Unsupported NPZ\+JSON format"):
         _validate(root, validator)
+
+
+@pytest.mark.parametrize("validator", ["metadata", "read", "selected", "stream"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        1,
+        1.0,
+        True,
+        None,
+        [],
+        {},
+        ["N2610210"],
+        "1",
+        "N261021",
+        "N26102100",
+        "N261021A",
+        "n2610210",
+        "S2610210",
+        "N2610220",
+        "N2610211",
+    ],
+)
+def test_unsupported_storage_versions_fail_before_array_io(
+    tmp_path, validator, version
+):
+    root = tmp_path / "artifact"
+    # A small scalar/array payload isolates storage version admission.
+    write_preprocessed_artifact(root, {"array": np.arange(2), "label": "portable"})
+    metadata_path = root / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["format_version"] = version
+    metadata_path.write_text(json.dumps(metadata))
+    (root / "core.npz").unlink()
+
+    with pytest.raises(ValueError, match=r"Unsupported NPZ\+JSON format version"):
+        if validator == "metadata":
+            read_metadata(metadata_path.read_bytes())
+        elif validator == "selected":
+            load_preprocessed_artifact(root, root_keys=["label"])
+        else:
+            _validate(root, validator)
+    assert not preprocessed_artifact_exists(root)
+
+
+@pytest.mark.parametrize("version", [1, True, ["N2610210"], "F2610210", "N2610211"])
+@pytest.mark.parametrize("operation", ["read", "selected", "replace_sequence"])
+def test_s3_unsupported_storage_versions_fail_before_store_io(
+    tmp_path, monkeypatch, version, operation
+):
+    root = tmp_path / "artifact"
+    write_preprocessed_artifact(root, {"array": np.arange(2), "label": "portable"})
+    metadata = json.loads((root / "metadata.json").read_text())
+    metadata["format_version"] = version
+    metadata_bytes = json.dumps(metadata).encode()
+    requests = []
+
+    class Client:
+        def close(self):
+            pass
+
+        def get_object(self, Bucket, Key):
+            requests.append(Key)
+            assert Key == "artifact/metadata.json"
+            return {
+                "Body": io.BytesIO(metadata_bytes),
+                "ContentLength": len(metadata_bytes),
+            }
+
+        def head_object(self, Bucket, Key):
+            assert Key == "artifact/metadata.json"
+            return {"ContentLength": len(metadata_bytes)}
+
+    monkeypatch.setattr(transports, "_get_s3_client", lambda endpoint=None: Client())
+    reference = "s3://bucket/artifact"
+    with pytest.raises(ValueError, match=r"Unsupported NPZ\+JSON format version"):
+        if operation == "replace_sequence":
+            replace_preprocessed_artifact_sequence(
+                reference, {"sequence": np.ones((2, 3), dtype=np.float32)}
+            )
+        elif operation == "selected":
+            load_preprocessed_artifact(reference, root_keys=["label"])
+        else:
+            load_preprocessed_artifact(reference)
+    assert not preprocessed_artifact_exists(reference)
+    assert requests == ["artifact/metadata.json", "artifact/metadata.json"]

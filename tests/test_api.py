@@ -70,4 +70,4 @@ def test_full_atom_schema_version_is_the_packaged_supported_version():
 
     assert cryoflake.FULL_ATOM_TARGET_SCHEMA_VERSION == FULL_ATOM_TARGET_SCHEMA_VERSION
     assert FULL_ATOM_TARGET_SCHEMA_VERSION == target_contract().full_atom_schema_version
-    assert FULL_ATOM_TARGET_SCHEMA_VERSION == 1
+    assert FULL_ATOM_TARGET_SCHEMA_VERSION == "F2610210"

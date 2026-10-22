@@ -24,7 +24,12 @@ from cryoflake import (
     write_preprocessed_artifact,
 )
 from cryoflake.config import compose_config
-from cryoflake.constants import AnchorKind, NodeKind, PolymerKind
+from cryoflake.constants import (
+    COMPONENT_EXTENSION_SCHEMA_VERSION,
+    AnchorKind,
+    NodeKind,
+    PolymerKind,
+)
 from cryoflake.manifests.manifest import read_source_associations
 from cryoflake.manifests.splits import (
     SPLIT_REPORT_SCHEMA_VERSION,
@@ -405,6 +410,11 @@ def test_metadata_required_field_table_matches_real_artifacts(doc_workspace):
     )
 
     assert documented_fields == set(metadata)
+    version_row = next(row for row in rows if row[0] == "`format_version`")
+    assert version_row[1] == "string"
+    documented_version = json.loads(re.search(r'`("N\d{7}")`', version_row[2])[1])
+    assert type(metadata["format_version"]) is str
+    assert metadata["format_version"] == documented_version == "N2610210"
     assert metadata["split_sequence"] is True
     assert set(metadata["files"]) == {"core", "sequence"}
     assert set(metadata["files"]) == set(metadata["store_generations"])
@@ -423,9 +433,9 @@ def test_full_atom_shape_and_dtype_table_matches_validated_targets(doc_workspace
         name = field.strip("`")
         if shape == "Scalar":
             assert name == "schema_version"
-            assert dtype == "`int`"
-            assert type(normalized[name]) is int
-            assert normalized[name] == FULL_ATOM_TARGET_SCHEMA_VERSION == 1
+            assert dtype == "`str`"
+            assert type(normalized[name]) is str
+            assert normalized[name] == FULL_ATOM_TARGET_SCHEMA_VERSION == "F2610210"
             continue
         expected_shape = ast.literal_eval(
             shape.strip("`").replace("R", str(residue_count))
@@ -500,7 +510,7 @@ def test_named_full_atom_roundtrip_reconstructs_sparse_atoms_from_the_guide(
     restored_targets = namespace["restored_targets"]
     np.testing.assert_array_equal(namespace["protein_mask"], [True, False])
     assert "prot_mask" not in restored_targets
-    assert type(restored_targets["schema_version"]) is int
+    assert type(restored_targets["schema_version"]) is str
     assert restored_targets["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION
     assert restored_targets["atom_names"].dtype.kind == "U"
     assert restored_targets["atom_names"].shape == (65,)
@@ -532,7 +542,7 @@ def test_named_full_atom_roundtrip_reconstructs_sparse_atoms_from_the_guide(
     artifact_dir = doc_workspace.root / "data/artifacts/named-roundtrip"
     metadata = read_metadata(artifact_dir / "metadata.json")
     target_tree = metadata["tree"]["items"]["full_atom_targets"]["items"]
-    assert target_tree["schema_version"] == {"kind": "scalar", "value": 1}
+    assert target_tree["schema_version"] == {"kind": "scalar", "value": "F2610210"}
     assert "prot_mask" not in target_tree
     assert target_tree["atom_names"]["shape"] == [65]
     assert (
@@ -578,7 +588,7 @@ def test_documented_full_atom_extractor_preserves_shared_names_and_reorders_rows
 
     extracted = extract_full_atom_targets(source)
 
-    assert extracted["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION == 1
+    assert extracted["schema_version"] == FULL_ATOM_TARGET_SCHEMA_VERSION == "F2610210"
     assert "prot_mask" not in extracted
     for field in ("aatype", "chain_index", "residue_index"):
         np.testing.assert_array_equal(extracted[field], targets[field])
@@ -621,11 +631,17 @@ def test_documented_extractor_requires_aligned_residue_rows(
     [
         (("schema_version", "atom_names"), None),
         (("schema_version",), None),
-        (("atom_names",), 1),
+        (("atom_names",), FULL_ATOM_TARGET_SCHEMA_VERSION),
+        ((), 1),
         ((), 0),
         ((), 2),
         ((), True),
         ((), 1.0),
+        ((), "1"),
+        ((), "F2610211"),
+        ((), "F2610220"),
+        ((), "E2610210"),
+        ((), b"F2610210"),
     ],
 )
 def test_documented_full_atom_schema_rejects_legacy_or_unsupported_mappings(
@@ -698,9 +714,7 @@ def test_documented_full_atom_table_rejects_residue_indexed_names(
 
 
 def test_component_fields_and_enum_tables_match_validated_schema(doc_workspace):
-    section = _reference_section(
-        "contract-geometry", "### Component extension, schema version 1"
-    )
+    section = _reference_section("contract-geometry", "### Component extension")
     payload = load_preprocessed_artifact("data/artifacts/example")
     extension = validate_component_extension_targets(payload["extension_targets"])
     rows = _table_rows(section)
@@ -1092,7 +1106,7 @@ def test_documented_versions_match_runtime_and_written_artifacts(doc_workspace):
     source = get_example("contract-geometry").path.read_text()
     introduction = source.split("\n## ", maxsplit=1)[0]
     documented_versions = {
-        row[0]: int(row[1].strip("`"))
+        row[0]: json.loads(row[1].strip("`"))
         for row in _table_rows(introduction)
         if row[1].startswith("`")
     }
@@ -1104,14 +1118,30 @@ def test_documented_versions_match_runtime_and_written_artifacts(doc_workspace):
         "NPZ+JSON storage": metadata["format_version"],
         "Full-atom targets": artifact_mapping["full_atom_targets"]["schema_version"],
         "Component extension": artifact_mapping["extension_targets"]["schema_version"],
+        "Grouped split reports": SPLIT_REPORT_SCHEMA_VERSION,
+        "Preprocessing checkpoints": PREPROCESS_CHECKPOINT_FORMAT_VERSION,
     }
-    checkpoint = re.search(r"`format_version: (\d+)`", source)
+    assert artifact_mapping["extension_targets"]["schema_version"] == (
+        COMPONENT_EXTENSION_SCHEMA_VERSION
+    )
+    assert list(documented_versions.values()) == [
+        "S2610210",
+        "N2610210",
+        "F2610210",
+        "E2610210",
+        "G2610210",
+        "C2610210",
+    ]
+    assert all(type(value) is str for value in documented_versions.values())
+    checkpoint = re.search(r'`format_version: ("C\d{7}")`', source)
     assert checkpoint is not None
-    assert int(checkpoint[1]) == PREPROCESS_CHECKPOINT_FORMAT_VERSION
+    assert json.loads(checkpoint[1]) == PREPROCESS_CHECKPOINT_FORMAT_VERSION
     report_section = _reference_section(
         "contract-geometry", "## Artifact lists and split reports"
     )
     report_version = next(
         row[1] for row in _table_rows(report_section) if row[0] == "`schema_version`"
     )
-    assert int(report_version.strip("`")) == SPLIT_REPORT_SCHEMA_VERSION
+    assert json.loads(re.search(r'`("G\d{7}")`', report_version)[1]) == (
+        SPLIT_REPORT_SCHEMA_VERSION
+    )

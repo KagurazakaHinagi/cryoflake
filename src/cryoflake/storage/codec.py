@@ -204,7 +204,7 @@ def read_metadata(data: bytes | Path) -> dict[str, object]:
     if value.get("format") != FORMAT_NAME:
         raise ValueError(f"Unsupported NPZ+JSON format: {value.get('format')!r}")
     if (
-        type(value.get("format_version")) is not int
+        type(value.get("format_version")) is not str
         or value.get("format_version") != FORMAT_VERSION
     ):
         raise ValueError(

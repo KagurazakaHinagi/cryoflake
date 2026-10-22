@@ -396,6 +396,14 @@ def test_prepare_manifest_requires_explicit_source_before_io(tmp_path, monkeypat
         (["--artifact-s3-prefix", "s3://bucket/key"], "scratch storage"),
         (
             ["-o", "contracts.artifact.format_version=2"],
+            "must be a schema version string",
+        ),
+        (
+            ["-o", "contracts.artifact.format_version=N2610211"],
+            "Unsupported artifact contract",
+        ),
+        (
+            ["-o", "contracts.artifact.format_version=F2610210"],
             "Unsupported artifact contract",
         ),
     ],

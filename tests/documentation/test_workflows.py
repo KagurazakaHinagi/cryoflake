@@ -484,7 +484,7 @@ def test_split_options_produce_disjoint_nonempty_datasets(
     assert {row["split"] for row in summary} == {"train", "valid"}
     if split_strategy == "component":
         report = json.loads((doc_workspace.root / "data/split.json").read_text())
-        assert report["schema_version"] == 3
+        assert report["schema_version"] == "G2610210"
         assert report["split_strategy"] == "component"
         assert report["num_records"] == 2
         assert report["num_train_records"] == report["num_validation_records"] == 1
@@ -618,10 +618,15 @@ def test_configuration_inspection_examples_resolve_groups_and_interpolation(
     ]
     assert configs[-1].pipeline.workers == 4
     assert configs[-1].pipeline.preprocess_workers == 4
-    assert all(config.contracts.artifact.format_version == 1 for config in configs)
-    assert all(config.contracts.targets.schema_version == 1 for config in configs)
     assert all(
-        config.contracts.targets.full_atom_schema_version == 1 for config in configs
+        config.contracts.artifact.format_version == "N2610210" for config in configs
+    )
+    assert all(
+        config.contracts.targets.schema_version == "E2610210" for config in configs
+    )
+    assert all(
+        config.contracts.targets.full_atom_schema_version == "F2610210"
+        for config in configs
     )
 
 
@@ -635,12 +640,24 @@ def test_project_configuration_examples_compose_and_execute(doc_workspace):
     assert len(read_manifest_csv(doc_workspace.root / "data/manifest.csv")) == 2
 
 
-@pytest.mark.parametrize("field", ["schema_version", "full_atom_schema_version"])
-def test_documented_target_schema_versions_cannot_be_overridden(doc_workspace, field):
+@pytest.mark.parametrize(
+    "field, unsupported",
+    [
+        ("schema_version", "2"),
+        ("schema_version", "E2610211"),
+        ("schema_version", "F2610210"),
+        ("full_atom_schema_version", "1"),
+        ("full_atom_schema_version", "F2610220"),
+        ("full_atom_schema_version", "E2610210"),
+    ],
+)
+def test_documented_target_schema_versions_cannot_be_overridden(
+    doc_workspace, field, unsupported
+):
     command = get_example("config-inspect").commands()[0]
 
     result = doc_workspace.invoke(
-        [*command, "-o", f"contracts.targets.{field}=2"], check=False
+        [*command, "-o", f"contracts.targets.{field}={unsupported}"], check=False
     )
 
     assert result.exit_code == 2
@@ -658,7 +675,7 @@ def test_custom_yaml_group_example_composes_with_packaged_defaults(doc_workspace
     assert config.pipeline.workers == 4
     assert config.pipeline.source_csv == "data/source.csv"
     assert config.pipeline.manifest_csv == "data/manifest.csv"
-    assert config.contracts.artifact.format_version == 1
+    assert config.contracts.artifact.format_version == "N2610210"
 
 
 def test_python_configuration_example_validates_and_runs(doc_workspace):

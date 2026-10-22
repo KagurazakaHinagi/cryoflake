@@ -601,12 +601,16 @@
       "bytes": 3190848
     },
     "standard_arrays.npz": {
-      "sha256": "fa63b3e85d43c1fdc856bccbd3a4bc6fd90c37c68d0ea2ac8694b4afcd2eef32",
-      "bytes": 1074720
+      "sha256": "66724c3b7f519aa01924f9464d61a6540835fa015fcf0a26cb5e0ec2d030dd29",
+      "bytes": 1074744
     },
     "subset.cif.gz": {
       "sha256": "6f4953608e5d6f75c401343076b3b1e5ad1d8add62a44f5dee0acb1a8952ef5f",
       "bytes": 169009
     }
+  },
+  "schema_versions": {
+    "full_atom_targets": "F2610210",
+    "extension_targets": "E2610210"
   }
 }

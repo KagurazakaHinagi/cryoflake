@@ -9,9 +9,10 @@ Use `write_preprocessed_artifact()` to save an artifact and
 `cryoflake` and `cryoflake.storage`. This guide starts with those operations;
 the metadata, array encoding, and publication rules follow below.
 
-The storage format is **`cryoflake-preprocessed`, version `1`**. The separate
-[data contracts](data-contracts.md#complete-training-payload) define semantic
-preprocessing contract **2**, including the fields a training artifact needs.
+The storage format is **`cryoflake-preprocessed`, version `"N2610210"`**.
+The separate [data contracts](data-contracts.md#complete-training-payload)
+define semantic preprocessing contract **`"S2610210"`**, including the fields
+a training artifact needs.
 A portable mapping can round-trip through storage without satisfying that
 training contract.
 
@@ -67,9 +68,12 @@ Choose the check that matches how you intend to use the payload:
 
 Use loading for a generic portable mapping and semantic validation for an
 artifact intended for training. Manifest preprocessing also requires the
-training contract before accepting an artifact. The nested full-atom and
-component schemas are both version `1`; these versions are independent of
-storage format `1` and semantic preprocessing contract `2`.
+training contract before accepting an artifact. The nested full-atom schema
+is `"F2610210"` and the component extension schema is `"E2610210"`. Their
+identifiers are independent of storage format `"N2610210"` and semantic
+preprocessing contract `"S2610210"`. The
+[data contract version table](data-contracts.md) explains their `PYYMMDDX`
+format and exact-match validation.
 
 ## Round-trip example
 
@@ -182,7 +186,7 @@ these required fields:
 | Field | Type | Contract |
 | --- | --- | --- |
 | `format` | string | Exactly `"cryoflake-preprocessed"`. |
-| `format_version` | integer | Exactly `1`; a JSON boolean is not an integer version. |
+| `format_version` | string | Exactly `"N2610210"`; integer versions and other identifiers are rejected. |
 | `split_sequence` | boolean | Exactly `true`. |
 | `files` | object | Exactly `{"core": "core.npz"}`, optionally with `"sequence": "sequence.npz"`. Other store names or member filenames are rejected. |
 | `store_generations` | object | The same keys as `files`. Each value is a 32-character hexadecimal generation identifier. Writers generate a fresh lowercase UUID hex value for every rewritten store. |

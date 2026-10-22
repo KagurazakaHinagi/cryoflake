@@ -117,7 +117,13 @@ Public guides live in `docs/`. Project YAML overrides live in `configs/`,
 while installed defaults and format definitions live in
 `src/cryoflake/configs/`. Keep documentation tables and examples consistent
 with those definitions and their validators. Changes to serialized contracts
-must account for format/schema versions and checkpoint identities.
+must account for schema identifiers and checkpoint identities. All schema
+identifiers follow the domain-prefixed `PYYMMDDX` string format in the
+[data contracts](data-contracts.md): release date plus one revision digit.
+Update the owning constants, packaged descriptors, producers, readers,
+regression fixtures, and documentation together; reject earlier identifiers
+explicitly. Ask the user before advancing a contract identifier in future
+work.
 
 Wheels include packaged YAML resources. Source distributions also include
 project configuration, public guides, tests, and `.env.example`. Credentials

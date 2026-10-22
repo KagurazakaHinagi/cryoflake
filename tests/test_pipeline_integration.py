@@ -409,7 +409,7 @@ def test_recovered_grouped_split_report_replays_with_canonical_references(
     assert not journal.exists()
     assert first_core.read_bytes() == first_core_bytes
     original = json.loads(report.read_text())
-    assert original["schema_version"] == 3
+    assert original["schema_version"] == "G2610210"
     assert original["split_strategy"] == split_strategy
     assert {row["artifact_reference"] for row in original["assignments"]} == {
         str(reference) for reference in references

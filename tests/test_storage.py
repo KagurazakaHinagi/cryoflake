@@ -78,7 +78,7 @@ def test_local_round_trip_uses_split_stores_and_float32_grid(tmp_path):
 
     metadata = json.loads((artifact / "metadata.json").read_text())
     assert metadata["format"] == "cryoflake-preprocessed"
-    assert metadata["format_version"] == 1
+    assert metadata["format_version"] == "N2610210"
     assert (
         metadata["store_hashes"]["core"]
         == hashlib.sha256((artifact / "core.npz").read_bytes()).hexdigest()
@@ -375,6 +375,12 @@ def test_s3_artifact_round_trip_and_sequence_replacement(monkeypatch):
     root = "s3://bucket/artifacts/example"
     assert not preprocessed_artifact_exists(root)
     assert write_preprocessed_artifact(root, _payload()) == root
+    assert (
+        json.loads(objects[("bucket", "artifacts/example/metadata.json")])[
+            "format_version"
+        ]
+        == "N2610210"
+    )
     assert uploads == [
         "artifacts/example/core.npz",
         "artifacts/example/sequence.npz",
@@ -393,6 +399,12 @@ def test_s3_artifact_round_trip_and_sequence_replacement(monkeypatch):
         load_preprocessed_artifact(root)["sequence"], sequence
     )
     assert objects[("bucket", "artifacts/example/core.npz")] == core_before
+    assert (
+        json.loads(objects[("bucket", "artifacts/example/metadata.json")])[
+            "format_version"
+        ]
+        == "N2610210"
+    )
     assert uploads[-3:] == [
         "artifacts/example/metadata.json",
         "artifacts/example/sequence.npz",

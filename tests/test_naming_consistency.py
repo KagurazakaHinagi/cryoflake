@@ -264,7 +264,7 @@ def test_grouped_split_report_uses_reference_names_and_version_three(
         "num_validation_records",
         "assignments",
     }
-    assert payload["schema_version"] == 3
+    assert payload["schema_version"] == "G2610210"
     assert payload["split_strategy"] == split_strategy
     assert payload["num_train_records"] == payload["num_validation_records"] == 1
     assert [row["artifact_reference"] for row in payload["assignments"]] == [
@@ -293,7 +293,7 @@ def test_grouped_split_does_not_accept_old_field_or_keyword_names(tmp_path):
         )
 
 
-def test_checkpoint_version_five_uses_canonical_reference_fields(tmp_path):
+def test_checkpoint_date_version_uses_canonical_reference_fields(tmp_path):
     grouped_record = splits.GroupedSplitRecord(tmp_path / "artifact", "1abc")
     result = _PreprocessManifestRowResult(
         row_index=1,
@@ -321,7 +321,7 @@ def test_checkpoint_version_five_uses_canonical_reference_fields(tmp_path):
         metadata_path = checkpoint.metadata_path
         journal_path = checkpoint.journal_path
     metadata_document = json.loads(metadata_path.read_text())
-    assert metadata_document["format_version"] == 5
+    assert metadata_document["format_version"] == "C2610210"
     with PreprocessCheckpoint(summary, {}) as recovered:
         restored = recovered.records[1]
         assert restored["grouped_split_record"] == record["grouped_split_record"]

@@ -256,7 +256,7 @@ The [data contracts](data-contracts.md) define shapes, enum values, coordinate
 frames, valid masks, and the model-specific conventions the adapter must supply.
 The [named-atom roundtrip](data-contracts.md#full-atom-supervision) example reads
 stored names and masks to recover atom coordinates without a separate name table.
-The [component reader example](data-contracts.md#component-extension-schema-version-1)
+The [component reader example](data-contracts.md#component-extension)
 derives local masks, proposal coordinates, and split-group lists from stored fields.
 `validate_preprocessed_artifact_mapping()` does not check required keys, array
 values, or storage integrity, and it raises `ValueError` for a non-mapping input.

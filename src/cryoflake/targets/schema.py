@@ -130,9 +130,8 @@ def validate_component_extension_targets(extension_targets) -> dict:
         raise ValueError("extension_targets must contain schema_version and component")
     schema_version = extension_targets["schema_version"]
     if (
-        isinstance(schema_version, bool)
-        or not isinstance(schema_version, (int, np.integer))
-        or int(schema_version) != COMPONENT_EXTENSION_SCHEMA_VERSION
+        not isinstance(schema_version, str)
+        or schema_version != COMPONENT_EXTENSION_SCHEMA_VERSION
     ):
         raise ValueError("unsupported component extension schema_version")
     component = extension_targets["component"]
