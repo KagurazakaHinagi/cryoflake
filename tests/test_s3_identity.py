@@ -116,17 +116,54 @@ def test_checkpoint_identity_uses_dotenv_destination_and_excludes_credentials(
     assert json_sha256(_contract(tmp_path)) == json_sha256(first)
 
 
-def test_yaml_target_contract_change_invalidates_checkpoint(monkeypatch, tmp_path):
+@pytest.mark.parametrize("field", ["schema_version", "full_atom_schema_version"])
+def test_yaml_target_contract_change_invalidates_checkpoint(
+    monkeypatch, tmp_path, field
+):
     first = _contract(tmp_path)
     original = artifact_identity.target_contract()
     monkeypatch.setattr(
         artifact_identity,
         "target_contract",
-        lambda: replace(original, schema_version=original.schema_version + 1),
+        lambda: replace(original, **{field: f"{getattr(original, field)[:-1]}1"}),
     )
     second = _contract(tmp_path)
     assert (
-        first["format_contracts"]["targets"]["schema_version"]
-        != second["format_contracts"]["targets"]["schema_version"]
+        first["format_contracts"]["targets"][field]
+        != second["format_contracts"]["targets"][field]
     )
+    assert json_sha256(first) != json_sha256(second)
+
+
+def test_dated_versions_are_recorded_in_checkpoint_contract(tmp_path):
+    contract = _contract(tmp_path)
+    assert contract["artifact_contract_version"] == "S2610210"
+    assert contract["format_contracts"]["artifact"]["format_version"] == "N2610210"
+    targets = contract["format_contracts"]["targets"]
+    assert targets["full_atom_schema_version"] == "F2610210"
+    assert targets["schema_version"] == "E2610210"
+
+
+def test_semantic_contract_change_invalidates_checkpoint(monkeypatch, tmp_path):
+    first = _contract(tmp_path)
+    monkeypatch.setattr(
+        artifact_identity, "PREPROCESSED_ARTIFACT_CONTRACT_VERSION", "S2610211"
+    )
+    second = _contract(tmp_path)
+    assert first["artifact_contract_version"] == "S2610210"
+    assert second["artifact_contract_version"] == "S2610211"
+    assert json_sha256(first) != json_sha256(second)
+
+
+def test_storage_contract_change_invalidates_checkpoint(monkeypatch, tmp_path):
+    first = _contract(tmp_path)
+    original = artifact_identity.artifact_contract()
+    monkeypatch.setattr(
+        artifact_identity,
+        "artifact_contract",
+        lambda: replace(original, format_version="N2610211"),
+    )
+    second = _contract(tmp_path)
+    assert first["format_contracts"]["artifact"]["format_version"] == "N2610210"
+    assert second["format_contracts"]["artifact"]["format_version"] == "N2610211"
     assert json_sha256(first) != json_sha256(second)

@@ -13,10 +13,6 @@ import numpy as np
 from cryoflake.manifests.manifest import (
     normalize_emdb_id,
 )
-from cryoflake.metadata import (
-    validate_density_grid,
-    validate_voxel_size,
-)
 from cryoflake.storage.transports import (
     is_remote_uri,
 )
@@ -73,22 +69,6 @@ def _read_input_voxel_size(map_path: os.PathLike) -> str:
     except Exception:
         return ""
     return str(voxel_size)
-
-
-def _artifact_voxel_size(artifact_mapping: Mapping[str, object]) -> str:
-    try:
-        voxel_size = validate_voxel_size(artifact_mapping.get("voxel_size"))
-    except Exception:
-        return ""
-    return str(float(voxel_size))
-
-
-def _artifact_grid_shape(artifact_mapping: Mapping[str, object]) -> str:
-    try:
-        grid = validate_density_grid(artifact_mapping.get("density_grid"))
-    except Exception:
-        return ""
-    return "x".join(str(int(axis_length)) for axis_length in grid.shape)
 
 
 def _preprocess_summary_row(

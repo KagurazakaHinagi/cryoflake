@@ -18,7 +18,7 @@ def test_packaged_contracts_and_groups_preserve_dataset_wire_format():
     targets = target_contract()
     assert (artifact.format_name, artifact.format_version) == (
         "cryoflake-preprocessed",
-        1,
+        "N2610210",
     )
     assert (
         artifact.metadata_file_name,
@@ -30,7 +30,11 @@ def test_packaged_contracts_and_groups_preserve_dataset_wire_format():
         "sequence.npz",
     )
     assert artifact.generation_key == "__cryoflake_store_generation__"
-    assert targets.schema_version == 1
+    assert type(artifact.format_version) is str
+    assert targets.schema_version == "E2610210"
+    assert targets.full_atom_schema_version == "F2610210"
+    assert type(targets.schema_version) is str
+    assert type(targets.full_atom_schema_version) is str
     assert (
         targets.full_atom_count,
         targets.rigid_group_count,
@@ -40,7 +44,62 @@ def test_packaged_contracts_and_groups_preserve_dataset_wire_format():
         config = compose_config(pipeline=group)
         assert config.pipeline.name == group
         assert config.pipeline.sequence_embedding_suffix == ".npz"
+        assert config.contracts.targets.full_atom_schema_version == "F2610210"
         assert OmegaConf.is_struct(config)
+
+
+@pytest.mark.parametrize(
+    "section, field, version",
+    [
+        ("artifact", "format_version", "N2610210"),
+        ("targets", "schema_version", "E2610210"),
+        ("targets", "full_atom_schema_version", "F2610210"),
+    ],
+)
+def test_supported_schema_versions_remain_strings_through_hydra_and_python(
+    section, field, version
+):
+    for config in (
+        compose_config([f"contracts.{section}.{field}={version}"]),
+        compose_config(values={"contracts": {section: {field: version}}}),
+    ):
+        assert config.contracts[section][field] == version
+        assert type(config.contracts[section][field]) is str
+
+
+@pytest.mark.parametrize(
+    "section, field, prefix",
+    [
+        ("artifact", "format_version", "N"),
+        ("targets", "schema_version", "E"),
+        ("targets", "full_atom_schema_version", "F"),
+    ],
+)
+@pytest.mark.parametrize(
+    "version",
+    [
+        1,
+        1.0,
+        True,
+        None,
+        [],
+        {},
+        "1",
+        "Z2610210",
+        "{prefix}2610211",
+        "{prefix}2610200",
+        "{prefix}2610320",
+        "{prefix}26102100",
+        " {prefix}2610210",
+    ],
+)
+def test_contract_versions_reject_legacy_values_and_unsupported_identifiers(
+    section, field, prefix, version
+):
+    if isinstance(version, str):
+        version = version.format(prefix=prefix)
+    with pytest.raises(ValueError, match=field):
+        compose_config(values={"contracts": {section: {field: version}}})
 
 
 @pytest.mark.parametrize("field", ["metadata_file", "core_file", "sequence_file"])
@@ -115,6 +174,10 @@ def test_hydra_overrides_and_interpolation_do_not_change_cwd(tmp_path, monkeypat
         "pipeline.sequence_embedding_suffix=.json",
         "pipeline.sequence_embedding_suffix=''",
         "contracts.targets.schema_version=2",
+        "contracts.targets.full_atom_schema_version=0",
+        "contracts.targets.full_atom_schema_version=2",
+        "contracts.targets.full_atom_schema_version=true",
+        "contracts.targets.full_atom_schema_version=1.5",
         "contracts.targets.full_atom_count=99",
         "+pipeline.unrecognized=true",
         "pipeline.artifact_reference=hf://buckets/user/artifact",
@@ -251,7 +314,7 @@ def test_repository_project_config_reuses_packaged_groups():
     assert config.pipeline.name == "manifest"
     assert config.pipeline.workers == 4
     assert config.pipeline.manifest_csv == "data/manifest.csv"
-    assert config.contracts.artifact.format_version == 1
+    assert config.contracts.artifact.format_version == "N2610210"
 
 
 def test_config_loads_selected_dotenv_before_resolving_storage_endpoint(

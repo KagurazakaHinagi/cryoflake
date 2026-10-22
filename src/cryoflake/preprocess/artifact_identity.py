@@ -9,6 +9,7 @@ from typing import Callable, Mapping, Optional
 
 from cryoflake.common import json_sha256
 from cryoflake.config import artifact_contract, target_contract
+from cryoflake.constants import FULL_ATOM_TARGET_KEYS, FULL_ATOM_TOPOLOGY_KEYS
 from cryoflake.preprocess.checkpoint_identity import callable_identity
 from cryoflake.storage.codec import (
     CORE_FILE_NAME,
@@ -20,8 +21,9 @@ from cryoflake.storage.transports import (
     file_reference_identity,
     resolve_s3_settings,
 )
+from cryoflake.targets.schema import _COMPONENT_KEYS, _PROPOSAL_KEYS
 
-PREPROCESSED_ARTIFACT_CONTRACT_VERSION = 3
+PREPROCESSED_ARTIFACT_CONTRACT_VERSION = "S2610210"
 
 
 def manifest_source_identity(
@@ -97,6 +99,13 @@ def preprocess_checkpoint_contract(
         "format_contracts": {
             "artifact": asdict(artifact_contract()),
             "targets": asdict(target_contract()),
+        },
+        "target_fields": {
+            "full_atom_targets": sorted(
+                ("schema_version", *FULL_ATOM_TARGET_KEYS, *FULL_ATOM_TOPOLOGY_KEYS)
+            ),
+            "extension_targets.component": sorted(_COMPONENT_KEYS),
+            "extension_targets.component.proposal_targets": sorted(_PROPOSAL_KEYS),
         },
         "manifest_path": str(manifest_csv.resolve()),
         "manifest_sha256": json_sha256([dict(row) for row in manifest_rows]),

@@ -61,3 +61,13 @@ def test_public_convenience_exports_share_the_canonical_implementation():
         cryoflake.validate_sequence_embedding_payload
         is validate_sequence_embedding_payload
     )
+
+
+def test_full_atom_schema_version_is_the_packaged_supported_version():
+    import cryoflake
+    from cryoflake.config import target_contract
+    from cryoflake.constants import FULL_ATOM_TARGET_SCHEMA_VERSION
+
+    assert cryoflake.FULL_ATOM_TARGET_SCHEMA_VERSION == FULL_ATOM_TARGET_SCHEMA_VERSION
+    assert FULL_ATOM_TARGET_SCHEMA_VERSION == target_contract().full_atom_schema_version
+    assert FULL_ATOM_TARGET_SCHEMA_VERSION == "F2610210"

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from standard_target import load_standard_artifact_mapping, standard_expected
 
 from cryoflake import (
     FASTASequence,
@@ -26,14 +27,11 @@ from cryoflake.storage.transports import join_remote_uri, split_s3_uri
 
 
 def _payload(*, include_sequence: bool = True) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "density_grid": np.arange(64, dtype=np.float64).reshape(4, 4, 4),
-        "voxel_size": np.float32(1.25),
-        "global_origin": np.asarray([1.0, 2.0, 3.0], dtype=np.float32),
-        "backbone_coordinates": {"CA": np.arange(6, dtype=np.float32).reshape(2, 3)},
-        "metadata": {"source": "test"},
-    }
+    payload = load_standard_artifact_mapping()
+    # Explicit dtype-conversion probe on the canonical real density.
+    payload["density_grid"] = payload["density_grid"].astype(np.float64)
     if include_sequence:
+        # Controlled numeric embeddings test storage, not model inference.
         payload.update(
             {
                 "sequence": np.arange(12, dtype=np.float32).reshape(2, 6),
@@ -80,7 +78,7 @@ def test_local_round_trip_uses_split_stores_and_float32_grid(tmp_path):
 
     metadata = json.loads((artifact / "metadata.json").read_text())
     assert metadata["format"] == "cryoflake-preprocessed"
-    assert metadata["format_version"] == 1
+    assert metadata["format_version"] == "N2610210"
     assert (
         metadata["store_hashes"]["core"]
         == hashlib.sha256((artifact / "core.npz").read_bytes()).hexdigest()
@@ -90,6 +88,18 @@ def test_local_round_trip_uses_split_stores_and_float32_grid(tmp_path):
         == hashlib.sha256((artifact / "sequence.npz").read_bytes()).hexdigest()
     )
     assert preprocessed_artifact_exists(artifact)
+    validated = validate_preprocessed_artifact(
+        artifact, require_sequence_embeddings=True
+    )
+    expected = standard_expected()
+    assert validated.grid_shape == expected["grid_shape"]
+    assert validated.protein_nodes == expected["protein_nodes"]
+    assert validated.nucleotide_nodes == expected["nucleotide_nodes"]
+    assert validated.component_nodes == expected["component_nodes"]
+    np.testing.assert_array_equal(
+        loaded["full_atom_targets"]["atom_names"],
+        payload["full_atom_targets"]["atom_names"],
+    )
 
 
 @pytest.mark.parametrize("representation", ["array", "npy", "npz"])
@@ -365,6 +375,12 @@ def test_s3_artifact_round_trip_and_sequence_replacement(monkeypatch):
     root = "s3://bucket/artifacts/example"
     assert not preprocessed_artifact_exists(root)
     assert write_preprocessed_artifact(root, _payload()) == root
+    assert (
+        json.loads(objects[("bucket", "artifacts/example/metadata.json")])[
+            "format_version"
+        ]
+        == "N2610210"
+    )
     assert uploads == [
         "artifacts/example/core.npz",
         "artifacts/example/sequence.npz",
@@ -373,6 +389,9 @@ def test_s3_artifact_round_trip_and_sequence_replacement(monkeypatch):
     assert preprocessed_artifact_exists(root)
     loaded = load_preprocessed_artifact(root)
     np.testing.assert_array_equal(loaded["sequence"], _payload()["sequence"])
+    validated = validate_preprocessed_artifact(root, require_sequence_embeddings=True)
+    assert validated.protein_nodes == standard_expected()["protein_nodes"]
+    assert validated.component_nodes == standard_expected()["component_nodes"]
     core_before = objects[("bucket", "artifacts/example/core.npz")]
     sequence = np.ones((2, 4), dtype=np.float32)
     replace_preprocessed_artifact_sequence(root, {"sequence": sequence})
@@ -380,6 +399,12 @@ def test_s3_artifact_round_trip_and_sequence_replacement(monkeypatch):
         load_preprocessed_artifact(root)["sequence"], sequence
     )
     assert objects[("bucket", "artifacts/example/core.npz")] == core_before
+    assert (
+        json.loads(objects[("bucket", "artifacts/example/metadata.json")])[
+            "format_version"
+        ]
+        == "N2610210"
+    )
     assert uploads[-3:] == [
         "artifacts/example/metadata.json",
         "artifacts/example/sequence.npz",

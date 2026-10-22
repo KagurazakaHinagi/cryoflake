@@ -7,11 +7,9 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from cryoflake.metadata import validate_coordinates
 from cryoflake.preprocess.reuse import (
-    _preprocessed_artifact_is_reusable,
+    _validate_training_artifact_mapping,
 )
-from cryoflake.sequence.validation import validate_sequence_embedding_payload
 from cryoflake.storage.store import load_preprocessed_artifact
 
 
@@ -42,35 +40,28 @@ def validate_preprocessed_artifact(
         include_sequence_embeddings=True,
         s3_endpoint_url=s3_endpoint_url,
     )
-    if not _preprocessed_artifact_is_reusable(
-        payload,
-        require_sequence_embeddings=require_sequence_embeddings,
-    ):
+    try:
+        validated = _validate_training_artifact_mapping(
+            payload,
+            require_sequence_embeddings=require_sequence_embeddings,
+        )
+    except (ImportError, TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
             f"Artifact does not satisfy the canonical preprocessing contract: "
             f"{artifact_reference!s}"
-        )
-
-    grid = payload["density_grid"]
-    coordinates = payload["backbone_coordinates"]
-    protein_coordinates = validate_coordinates(coordinates["CA"], allow_nan=True)
-    nucleotide_coordinates = validate_coordinates(coordinates["P"], allow_nan=True)
-    component = payload["extension_targets"]["component"]
+        ) from exc
 
     sequence_length = None
     sequence_feature_dim = None
-    if "sequence" in payload or "sequence_mask" in payload:
-        sequence_payload = validate_sequence_embedding_payload(payload)
-        sequence_length, sequence_feature_dim = map(
-            int, sequence_payload["sequence"].shape
-        )
+    if validated.sequence_shape is not None:
+        sequence_length, sequence_feature_dim = validated.sequence_shape
 
     return ArtifactValidationResult(
         artifact_reference=str(artifact_reference),
-        grid_shape=tuple(int(size) for size in grid.shape),
-        protein_nodes=int(len(protein_coordinates)),
-        nucleotide_nodes=int(len(nucleotide_coordinates)),
-        component_nodes=int(len(component["positions"])),
+        grid_shape=validated.grid_shape,
+        protein_nodes=validated.protein_nodes,
+        nucleotide_nodes=validated.nucleotide_nodes,
+        component_nodes=len(validated.component_targets["positions"]),
         sequence_length=sequence_length,
         sequence_feature_dim=sequence_feature_dim,
     )

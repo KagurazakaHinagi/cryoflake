@@ -167,10 +167,10 @@ RIGID_GROUP_COUNT = _TARGET_CONTRACT.rigid_group_count
 TORSION_COUNT = _TARGET_CONTRACT.torsion_count
 UNKNOWN_PROTEIN_INDEX = _TARGET_CONTRACT.unknown_protein_index
 FULL_RESIDUE_TYPE_COUNT = _TARGET_CONTRACT.full_residue_type_count
+FULL_ATOM_TARGET_SCHEMA_VERSION = _TARGET_CONTRACT.full_atom_schema_version
 
 FULL_ATOM_TARGET_KEYS = (
     "aatype",
-    "prot_mask",
     "atom_positions",
     "atom_mask",
     "b_factors",
@@ -182,6 +182,7 @@ FULL_ATOM_TARGET_KEYS = (
     "torsion_angles_sin_cos",
     "alt_torsion_angles_sin_cos",
     "torsion_angles_mask",
+    "atom_names",
 )
 FULL_ATOM_TOPOLOGY_KEYS = ("chain_index", "residue_index")
 

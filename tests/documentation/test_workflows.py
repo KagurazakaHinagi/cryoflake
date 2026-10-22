@@ -15,12 +15,23 @@ import numpy as np
 import pytest
 from dotenv import dotenv_values
 from omegaconf import OmegaConf
+from standard_target import standard_expected
 
 from cryoflake.manifests.manifest import read_artifact_list, read_manifest_csv
+from cryoflake.preprocess import manifest as preprocessing_manifest
+from cryoflake.preprocess import worker as preprocessing_worker
+from cryoflake.preprocess.checkpoint import (
+    CheckpointContractMismatchError,
+    PreprocessCheckpoint,
+)
+from cryoflake.preprocess.memory_guard import PreprocessMemoryAdmission
 from cryoflake.storage.artifacts import validate_preprocessed_artifact
 from cryoflake.storage.store import load_preprocessed_artifact
 
+from . import conftest as documentation_fixtures
 from .examples import get_example
+
+EXPECTED = standard_expected()
 
 pytestmark = pytest.mark.documentation
 
@@ -49,7 +60,10 @@ def _assert_complete_batch(workspace, *, remote: bool = False) -> list[Path | st
     assert all(row["status"] in {"processed", "reused"} for row in rows)
     assert all(row["cached_artifact_dir"] == "" for row in rows)
     assert [float(row["source_resolution"]) for row in rows] == [3.2, 2.8]
-    assert all(float(row["input_voxel_size"]) == 1.0 for row in rows)
+    assert all(
+        np.isclose(float(row["input_voxel_size"]), EXPECTED["voxel_size"])
+        for row in rows
+    )
     assert all(float(row["artifact_voxel_size"]) > 0 for row in rows)
     summary_references = {
         row["artifact_reference"]
@@ -60,9 +74,10 @@ def _assert_complete_batch(workspace, *, remote: bool = False) -> list[Path | st
     assert summary_references == set(map(str, paths))
     for path in paths:
         result = validate_preprocessed_artifact(path)
-        assert result.protein_nodes > 0
-        assert result.component_nodes > 0
-        assert all(size > 0 for size in result.grid_shape)
+        assert result.protein_nodes == EXPECTED["protein_nodes"]
+        assert result.nucleotide_nodes == EXPECTED["nucleotide_nodes"]
+        assert result.component_nodes == EXPECTED["component_nodes"]
+        assert result.grid_shape == EXPECTED["grid_shape"]
         if remote:
             assert str(path).startswith("s3://my-bucket/artifacts/")
         else:
@@ -131,6 +146,72 @@ def test_download_example_fetches_real_gzip_inputs(doc_workspace):
     assert all(row["map_path"].endswith(".map") for row in rows)
 
 
+@pytest.mark.parametrize(
+    "flag, expected_ids",
+    [
+        ("--include-without-structure", ["1234", "5678", "9999"]),
+        ("--exclude-without-structure", ["1234", "5678"]),
+    ],
+)
+def test_documented_association_flags_include_or_exclude_unassociated_rows(
+    doc_workspace, flag, expected_ids
+):
+    source_csv = doc_workspace.root / "data/source.csv"
+    source_csv.write_text(source_csv.read_text() + "EMD-9999,,4.2\n")
+    (command,) = get_example("readme-manifest").commands()
+
+    doc_workspace.invoke([*command, flag])
+
+    rows = read_manifest_csv(doc_workspace.root / "data/manifest.csv")
+    assert [row["emdb_id"] for row in rows] == expected_ids
+    if flag == "--include-without-structure":
+        assert rows[-1]["wwpdb_id"] == rows[-1]["structure_path"] == ""
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "polymer_atom_positions",
+        "polymer_chain_indices",
+        "polymer_residue_indices",
+        "polymer_aatype",
+    ],
+)
+def test_adapter_example_rejects_context_conversion_overflow(
+    doc_workspace, monkeypatch, field
+):
+    builder = documentation_fixtures.build_component_extension_targets
+
+    def with_overflow(*arguments, **keywords):
+        if field == "polymer_atom_positions":
+            values = np.asarray(keywords[field], dtype=np.float64)
+            values[0, 0] = 1e100
+        else:
+            values = np.asarray(keywords[field], dtype=np.uint64)
+            values[0] = np.iinfo(np.uint64).max
+        keywords[field] = values
+        return builder(*arguments, **keywords)
+
+    monkeypatch.setattr(
+        documentation_fixtures, "build_component_extension_targets", with_overflow
+    )
+    command = next(
+        command
+        for command in get_example("guide-single").commands()
+        if command[0] == "preprocess"
+    )
+    metadata_path = doc_workspace.root / "data/artifacts/example/metadata.json"
+    original_metadata = metadata_path.read_bytes()
+
+    result = doc_workspace.invoke(command, check=False)
+
+    assert result.exit_code == 1
+    expected_dtype = "float32" if field == "polymer_atom_positions" else "int64"
+    assert expected_dtype in result.output
+    assert len(doc_workspace.adapter_calls) == 1
+    assert metadata_path.read_bytes() == original_metadata
+
+
 def test_single_example_runs_adapter_and_validates_actual_artifact(doc_workspace):
     artifact = doc_workspace.root / "data/artifacts/example"
     shutil.rmtree(artifact)
@@ -147,10 +228,23 @@ def test_single_example_runs_adapter_and_validates_actual_artifact(doc_workspace
     result = json.loads(results[-1].output)
     actual = validate_preprocessed_artifact(artifact)
     assert result["grid_shape"] == list(actual.grid_shape)
-    assert result["protein_nodes"] == actual.protein_nodes == 1
-    assert result["nucleotide_nodes"] == actual.nucleotide_nodes == 1
-    assert result["component_nodes"] == actual.component_nodes == 1
-    assert load_preprocessed_artifact(artifact)["voxel_size"] == 1.5
+    assert actual.grid_shape == EXPECTED["grid_shape"]
+    assert result["protein_nodes"] == actual.protein_nodes == EXPECTED["protein_nodes"]
+    assert (
+        result["nucleotide_nodes"]
+        == actual.nucleotide_nodes
+        == EXPECTED["nucleotide_nodes"]
+    )
+    assert (
+        result["component_nodes"]
+        == actual.component_nodes
+        == EXPECTED["component_nodes"]
+    )
+    # The injected adapter records requests while preserving the real compact
+    # fixture's sampling; interpolation primitives are tested independently.
+    assert np.isclose(
+        load_preprocessed_artifact(artifact)["voxel_size"], EXPECTED["voxel_size"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -212,7 +306,20 @@ def test_single_artifact_guide_rejects_invalid_raw_file_paths_before_adapter_io(
     assert metadata_path.read_bytes() == original_metadata
 
 
-def test_cli_batch_example_produces_two_successful_training_artifacts(doc_workspace):
+def test_cli_batch_example_produces_two_successful_training_artifacts(
+    doc_workspace, monkeypatch
+):
+    contracts = []
+    build_contract = preprocessing_manifest.preprocess_checkpoint_contract
+
+    def capture_contract(**arguments):
+        contract = build_contract(**arguments)
+        contracts.append(contract)
+        return contract
+
+    monkeypatch.setattr(
+        preprocessing_manifest, "preprocess_checkpoint_contract", capture_contract
+    )
     doc_workspace.invoke(_batch_command())
     paths = _assert_complete_batch(doc_workspace)
     assert {Path(path).name for path in paths} == {
@@ -223,6 +330,81 @@ def test_cli_batch_example_produces_two_successful_training_artifacts(doc_worksp
     assert len(doc_workspace.http_calls) == 4
     assert not (doc_workspace.root / "data/summary.csv.checkpoint.json").exists()
     assert not (doc_workspace.root / "data/summary.csv.checkpoint.jsonl").exists()
+    (contract,) = contracts
+    artifact_mapping = load_preprocessed_artifact(paths[0])
+    component = artifact_mapping["extension_targets"]["component"]
+    assert contract["target_fields"] == {
+        "full_atom_targets": sorted(artifact_mapping["full_atom_targets"]),
+        "extension_targets.component": sorted(component),
+        "extension_targets.component.proposal_targets": sorted(
+            component["proposal_targets"]
+        ),
+    }
+    old_contract = json.loads(json.dumps(contract))
+    old_contract["target_fields"]["full_atom_targets"].append("prot_mask")
+    checkpoint_summary = doc_workspace.root / "data/layout-identity.csv"
+    with PreprocessCheckpoint(checkpoint_summary, old_contract):
+        pass
+    with pytest.raises(
+        CheckpointContractMismatchError, match="reset-preprocess-checkpoint"
+    ):
+        with PreprocessCheckpoint(checkpoint_summary, contract):
+            pass
+
+
+def test_batch_example_uses_compact_fixture_with_a_512_mib_memory_guard(
+    doc_workspace, monkeypatch
+):
+    budget = 512 * 1024**2
+    admissions = []
+    estimates = []
+    estimate_workload = preprocessing_worker.estimate_preprocess_memory_or_none
+
+    class TrackingAdmission(PreprocessMemoryAdmission):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.acquisitions = []
+            self.releases = []
+            admissions.append(self)
+
+        def acquire(self, requested_bytes):
+            super().acquire(requested_bytes)
+            self.acquisitions.append(requested_bytes)
+
+        def release(self, requested_bytes):
+            super().release(requested_bytes)
+            self.releases.append(requested_bytes)
+
+    def record_estimate(map_path, target_voxel_size):
+        estimate = estimate_workload(map_path, target_voxel_size)
+        estimates.append(estimate)
+        return estimate
+
+    monkeypatch.setattr(
+        preprocessing_manifest, "preprocess_memory_guard_limit_bytes", lambda: budget
+    )
+    monkeypatch.setattr(
+        preprocessing_manifest, "PreprocessMemoryAdmission", TrackingAdmission
+    )
+    monkeypatch.setattr(
+        preprocessing_worker, "estimate_preprocess_memory_or_none", record_estimate
+    )
+
+    doc_workspace.invoke(_batch_command())
+
+    _assert_complete_batch(doc_workspace)
+    assert [row["status"] for row in _summary(doc_workspace.root)] == ["processed"] * 2
+    assert len(doc_workspace.adapter_calls) == len(estimates) == 2
+    assert all(call["target_voxel_size"] == 1.0 for call in doc_workspace.adapter_calls)
+    for estimate in estimates:
+        assert estimate is not None
+        assert estimate.input_shape == EXPECTED["grid_shape"]
+        assert 0 < estimate.estimated_peak_bytes < budget
+    (admission,) = admissions
+    assert admission.limit_bytes == budget
+    assert admission.reserved_bytes == 0
+    assert len(admission.acquisitions) == len(admission.releases) == 2
+    assert sorted(admission.acquisitions) == sorted(admission.releases)
 
 
 def test_python_batch_example_uses_manifest_relative_input_paths(doc_workspace):
@@ -290,6 +472,7 @@ def test_split_options_produce_disjoint_nonempty_datasets(
 ):
     options = _options("guide-split-options")
     if split_strategy == "component":
+        doc_workspace.use_independent_component_groups()
         options += _options("guide-group-options")
     doc_workspace.invoke(_batch_command() + options)
     train = set(map(str, read_artifact_list(doc_workspace.root / "data/train.txt")))
@@ -301,7 +484,7 @@ def test_split_options_produce_disjoint_nonempty_datasets(
     assert {row["split"] for row in summary} == {"train", "valid"}
     if split_strategy == "component":
         report = json.loads((doc_workspace.root / "data/split.json").read_text())
-        assert report["schema_version"] == 3
+        assert report["schema_version"] == "G2610210"
         assert report["split_strategy"] == "component"
         assert report["num_records"] == 2
         assert report["num_train_records"] == report["num_validation_records"] == 1
@@ -317,6 +500,7 @@ def test_split_options_produce_disjoint_nonempty_datasets(
 
 
 def test_replay_options_preserve_report_selection_and_assignments(doc_workspace):
+    doc_workspace.use_independent_component_groups()
     doc_workspace.invoke(
         _batch_command()
         + _options("guide-split-options")
@@ -360,7 +544,9 @@ def test_validation_examples_check_real_local_and_remote_training_artifacts(
 ):
     doc_workspace.seed_training("data/artifacts/example")
     doc_workspace.seed_training("data/artifacts/emd_1001_1abc")
-    doc_workspace.seed_training("s3://my-bucket/artifacts/example")
+    doc_workspace.seed_training(
+        "s3://my-bucket/artifacts/example", include_sequence=True
+    )
     validations = []
     for command in get_example(example_id).commands():
         result = doc_workspace.invoke(command)
@@ -432,7 +618,16 @@ def test_configuration_inspection_examples_resolve_groups_and_interpolation(
     ]
     assert configs[-1].pipeline.workers == 4
     assert configs[-1].pipeline.preprocess_workers == 4
-    assert all(config.contracts.artifact.format_version == 1 for config in configs)
+    assert all(
+        config.contracts.artifact.format_version == "N2610210" for config in configs
+    )
+    assert all(
+        config.contracts.targets.schema_version == "E2610210" for config in configs
+    )
+    assert all(
+        config.contracts.targets.full_atom_schema_version == "F2610210"
+        for config in configs
+    )
 
 
 def test_project_configuration_examples_compose_and_execute(doc_workspace):
@@ -443,6 +638,30 @@ def test_project_configuration_examples_compose_and_execute(doc_workspace):
     for command in commands[1:]:
         doc_workspace.invoke(command)
     assert len(read_manifest_csv(doc_workspace.root / "data/manifest.csv")) == 2
+
+
+@pytest.mark.parametrize(
+    "field, unsupported",
+    [
+        ("schema_version", "2"),
+        ("schema_version", "E2610211"),
+        ("schema_version", "F2610210"),
+        ("full_atom_schema_version", "1"),
+        ("full_atom_schema_version", "F2610220"),
+        ("full_atom_schema_version", "E2610210"),
+    ],
+)
+def test_documented_target_schema_versions_cannot_be_overridden(
+    doc_workspace, field, unsupported
+):
+    command = get_example("config-inspect").commands()[0]
+
+    result = doc_workspace.invoke(
+        [*command, "-o", f"contracts.targets.{field}={unsupported}"], check=False
+    )
+
+    assert result.exit_code == 2
+    assert field in result.output
 
 
 def test_custom_yaml_group_example_composes_with_packaged_defaults(doc_workspace):
@@ -456,7 +675,7 @@ def test_custom_yaml_group_example_composes_with_packaged_defaults(doc_workspace
     assert config.pipeline.workers == 4
     assert config.pipeline.source_csv == "data/source.csv"
     assert config.pipeline.manifest_csv == "data/manifest.csv"
-    assert config.contracts.artifact.format_version == 1
+    assert config.contracts.artifact.format_version == "N2610210"
 
 
 def test_python_configuration_example_validates_and_runs(doc_workspace):

@@ -57,7 +57,7 @@ def test_fasta_namedtuple_roundtrip_retains_only_the_canonical_recognized_schema
     restored = load_preprocessed_artifact(artifact_dir)["fasta"]
     metadata = json.loads((artifact_dir / "metadata.json").read_text())
 
-    assert metadata["format_version"] == 1
+    assert metadata["format_version"] == "N2610210"
     assert set(metadata["tree"]["items"]["fasta"]["items"]) == {
         "sequence",
         "chain_count",

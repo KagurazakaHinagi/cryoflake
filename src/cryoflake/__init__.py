@@ -2,6 +2,7 @@
 
 from cryoflake.constants import (
     COMPONENT_EXTENSION_SCHEMA_VERSION,
+    FULL_ATOM_TARGET_SCHEMA_VERSION,
     AnchorKind,
     NodeKind,
     PolymerKind,
@@ -49,6 +50,7 @@ __all__ = [
     "ArtifactValidationResult",
     "AnchorKind",
     "COMPONENT_EXTENSION_SCHEMA_VERSION",
+    "FULL_ATOM_TARGET_SCHEMA_VERSION",
     "FASTAEmptyError",
     "FASTASequence",
     "NodeKind",

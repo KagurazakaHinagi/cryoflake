@@ -11,7 +11,9 @@ from pathlib import Path
 import numpy as np
 
 from cryoflake.storage.codec import (
+    _array_key,
     _collect_array_specs,
+    _required_stores,
     _selected_tree,
     read_metadata,
 )
@@ -129,16 +131,28 @@ def _read_npz_json_metadata(
     """Reconstruct from metadata already validated by the storage facade."""
 
     tree = _selected_tree(metadata["tree"], root_keys)
-    selected_specs: dict[
-        tuple[str, str],
-        tuple[np.dtype, tuple[int, ...]],
-    ] = {}
-    _collect_array_specs(tree, selected_specs)
+    if root_keys is not None and not _required_stores(
+        metadata, root_keys=tuple(tree["items"])
+    ):
+        # Metadata-only selections need no array descriptors or store I/O.
+        return _reconstruct_value(tree, {})
     declared_specs: dict[
         tuple[str, str],
         tuple[np.dtype, tuple[int, ...]],
     ] = {}
     _collect_array_specs(metadata["tree"], declared_specs)
+    if root_keys is None:
+        selected_specs = declared_specs
+    else:
+        # Encoded path components cannot contain '/'. Metadata validation has
+        # already proved every array key matches its full tree path, so select
+        # descriptors without traversing and reparsing the selected subtree.
+        selected_roots = {_array_key((key,)) for key in tree["items"]}
+        selected_specs = {
+            identity: descriptor
+            for identity, descriptor in declared_specs.items()
+            if identity[1].partition("/")[0] in selected_roots
+        }
     verified_store_hashes = verified_store_hashes or {}
     arrays = _load_array_store(
         core_data,

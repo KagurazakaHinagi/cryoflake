@@ -14,6 +14,7 @@ from cryoflake.common import (
     path_key,
     run_tasks_with_progress,
 )
+from cryoflake.constants import NodeKind
 from cryoflake.manifests.manifest import (
     get_preprocessed_artifact_name,
     normalize_emdb_id,
@@ -32,12 +33,10 @@ from cryoflake.preprocess.models import (
 from cryoflake.preprocess.reuse import (
     _find_reusable_preprocessed_artifact,
     _materialize_preprocess_input,
-    _preprocessed_artifact_is_reusable,
     _resolve_manifest_path,
+    _validate_training_artifact_mapping,
 )
 from cryoflake.preprocess.summary import (
-    _artifact_grid_shape,
-    _artifact_voxel_size,
     _finish_summary_row,
     _format_exception,
     _preprocess_summary_row,
@@ -178,7 +177,7 @@ def _preprocess_manifest_row(
     upload_future = None
     memory_request = None
     artifact_mapping = None
-    extension_targets = None
+    validated_artifact = None
     component_targets = None
     try:
         if task.upload_cache is not None:
@@ -308,35 +307,54 @@ def _preprocess_manifest_row(
                 sequence_embedding_loader=task.sequence_embedding_loader,
                 s3_endpoint_url=task.s3_endpoint_url,
             )
-        from cryoflake.targets.schema import (
-            validate_component_extension_targets,
-        )
-
         if artifact_mapping is None:
             artifact_mapping = load_preprocessed_artifact(
                 inspection_artifact_reference,
                 s3_endpoint_url=task.s3_endpoint_url,
             )
-        if not _preprocessed_artifact_is_reusable(
-            artifact_mapping,
-            expected_interface_contact_cutoff=task.interface_contact_cutoff,
-            require_sequence_embeddings=task.require_sequence_embeddings,
-        ):
+        validation_failed = False
+        try:
+            validated_artifact = _validate_training_artifact_mapping(
+                artifact_mapping,
+                expected_interface_contact_cutoff=task.interface_contact_cutoff,
+                require_sequence_embeddings=task.require_sequence_embeddings,
+            )
+        except (ImportError, TypeError, ValueError, OverflowError):
+            # Leave the exception scope before raising: its validator traceback
+            # can hold large arrays past the memory reservation's release.
+            validation_failed = True
+        if validation_failed:
             raise ValueError(
                 "Preprocessed artifact does not satisfy the training contract: "
                 f"{inspection_artifact_reference}. Check grid geometry, backbone/residue labels, "
                 "full-atom targets, component targets, and any sequence embeddings."
             )
-        extension_targets = validate_component_extension_targets(
-            artifact_mapping.get("extension_targets")
+        component_targets = validated_artifact.component_targets
+        component_group_ids = tuple(
+            sorted(
+                {
+                    str(component_id)
+                    for component_id, node_kind in zip(
+                        component_targets["component_id"],
+                        component_targets["node_kind"],
+                        strict=True,
+                    )
+                    if node_kind != int(NodeKind.WATER)
+                }
+            )
         )
-        component_targets = extension_targets["component"]
-        split_groups = component_targets["split_groups"]
-        component_group_ids = tuple(split_groups["component"])
-        interface_group_ids = tuple(split_groups["interface"])
+        interface_group_ids = tuple(
+            sorted(
+                {
+                    str(group_id)
+                    for group_id in component_targets["interface_group_id"]
+                    if group_id
+                }
+            )
+        )
         summary_row["component_node_count"] = str(len(component_targets["positions"]))
         summary_row["component_interface_count"] = str(
-            int(np.asarray(component_targets["interface_mask"]).sum())
+            int(np.count_nonzero(component_targets["interface_group_id"] != ""))
         )
         summary_row["component_group_ids"] = ";".join(component_group_ids)
         summary_row["interface_group_ids"] = ";".join(interface_group_ids)
@@ -350,8 +368,8 @@ def _preprocess_manifest_row(
             component_group_ids=component_group_ids,
             interface_group_ids=interface_group_ids,
         )
-        artifact_voxel_size = _artifact_voxel_size(artifact_mapping)
-        grid_shape = _artifact_grid_shape(artifact_mapping)
+        artifact_voxel_size = str(validated_artifact.voxel_size)
+        grid_shape = "x".join(str(size) for size in validated_artifact.grid_shape)
         if cached_artifact_dir is not None:
             upload_future = task.upload_cache.stage(
                 cached_artifact_dir, str(artifact_reference)
@@ -378,7 +396,7 @@ def _preprocess_manifest_row(
         # released. Drop both the payload and validation views first, even on
         # errors whose traceback keeps this frame alive.
         artifact_mapping = None
-        extension_targets = None
+        validated_artifact = None
         component_targets = None
         try:
             # Before stage() returns, this worker still owns its cache row.

@@ -30,10 +30,24 @@ imported by runtime code directly.
 
 ## Tests
 
-Tests generate small structures, density maps, manifests, and archives in
-temporary directories. S3 clients and model adapters are replaced with test
-doubles, so the suite does not need cloud credentials, network downloads, or
-model weights. Structure tests exercise Biotite parsing directly.
+The standard offline molecular target is **EMD-11736 / 7AE1**. Shared loaders in
+[`tests/standard_target.py`](../tests/standard_target.py) provide independent
+copies of its compact artifact mapping and full-atom targets, and write the
+matching structure. Use this target for general artifact, validation, and
+workflow scenarios. The fixture retains all 44 nucleotide residues, protein
+contact pockets, genuine atom names and cached geometry, and a downsampled
+64 × 64 × 64 density grid with its physical extent preserved. The
+[fixture README](../tests/fixtures/emd_11736_7ae1/README.md) describes derivation;
+[`provenance.json`](../tests/fixtures/emd_11736_7ae1/provenance.json) records the
+sources and transformations, including known upstream target limitations.
+
+Tests copy these inputs and generate manifests and archives in temporary
+directories. Synthetic data is reserved for explicit cases such as malformed
+fields, geometry boundaries, serialization types, and synthetic embedding
+replacement. Label mutations in the test so they are distinguishable from the
+deposited structure. S3 clients and model adapters are test doubles, so the
+suite needs no cloud credentials, network downloads, or model weights.
+Structure tests exercise Biotite parsing directly.
 
 Storage tests cover the [NPZ+JSON format](artifact-format.md), integrity,
 selective loading, and sequence replacement. Training validators are checked
@@ -66,7 +80,16 @@ so they cannot bypass example coverage.
 Tests execute Python blocks verbatim and pass CLI command arguments to Typer.
 Temporary workspaces supply real MRC/mmCIF inputs and NPZ+JSON artifacts, with
 injected application adapters, generators, and in-memory HTTP/S3 transports.
-They block live network calls and isolate credentials. Option fragments are
+The ordinary molecular payload comes from the compact EMD-11736 / 7AE1 target.
+Illustrative routing identifiers in commands remain placeholders; duplicated
+or filtered fixture inputs used for splitting do not represent additional
+depositions. The injected adapter records requested voxel settings while
+retaining the compact map's actual sampling; resampling primitives have
+separate tests. Its paired memory-estimate test double uses that retained
+sampling while preserving the worker's real admission and release guard.
+The documented batch command is also exercised with a 512 MiB guard budget.
+Synthetic embeddings are supplied only in sequence scenarios.
+The tests block live network calls and isolate credentials. Option fragments are
 combined with their documented base command, and examples assert artifacts,
 arrays, reports, geometry boundaries, and settings rather than only exit codes.
 Reference diagrams and signatures are classified separately; public signatures
@@ -94,7 +117,13 @@ Public guides live in `docs/`. Project YAML overrides live in `configs/`,
 while installed defaults and format definitions live in
 `src/cryoflake/configs/`. Keep documentation tables and examples consistent
 with those definitions and their validators. Changes to serialized contracts
-must account for format/schema versions and checkpoint identities.
+must account for schema identifiers and checkpoint identities. All schema
+identifiers follow the domain-prefixed `PYYMMDDX` string format in the
+[data contracts](data-contracts.md): release date plus one revision digit.
+Update the owning constants, packaged descriptors, producers, readers,
+regression fixtures, and documentation together; reject earlier identifiers
+explicitly. Ask the user before advancing a contract identifier in future
+work.
 
 Wheels include packaged YAML resources. Source distributions also include
 project configuration, public guides, tests, and `.env.example`. Credentials

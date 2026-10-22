@@ -8,6 +8,7 @@ from types import ModuleType
 
 import pytest
 from omegaconf import OmegaConf
+from standard_target import EMD_ID, PDB_ID, standard_expected
 from typer import rich_utils
 from typer.testing import CliRunner
 
@@ -35,7 +36,9 @@ def _install_adapter(monkeypatch, function):
 
 def _source_csv(tmp_path):
     source = tmp_path / "source.csv"
-    source.write_text("EMD-,Associated PDB,resolution\n1234,1ABC,2.5\n")
+    source.write_text(
+        f"EMD-,Associated PDB,resolution\n{EMD_ID},{PDB_ID.upper()},2.8\n"
+    )
     return source
 
 
@@ -85,14 +88,15 @@ def test_validate_artifact_prints_machine_readable_result(monkeypatch):
 
     def fake_validate(reference, **kwargs):
         calls.append((reference, kwargs))
+        expected = standard_expected()
         return ArtifactValidationResult(
             artifact_reference=str(reference),
-            grid_shape=(4, 5, 6),
-            protein_nodes=7,
-            nucleotide_nodes=8,
-            component_nodes=9,
-            sequence_length=10,
-            sequence_feature_dim=11,
+            grid_shape=tuple(expected["grid_shape"]),
+            protein_nodes=expected["protein_nodes"],
+            nucleotide_nodes=expected["nucleotide_nodes"],
+            component_nodes=expected["component_nodes"],
+            sequence_length=expected["protein_nodes"],
+            sequence_feature_dim=4,
         )
 
     monkeypatch.setattr(
@@ -118,7 +122,12 @@ def test_validate_artifact_prints_machine_readable_result(monkeypatch):
             },
         )
     ]
-    assert json.loads(result.output)["grid_shape"] == [4, 5, 6]
+    reported = json.loads(result.output)
+    expected = standard_expected()
+    assert reported["grid_shape"] == list(expected["grid_shape"])
+    for field in ("protein_nodes", "nucleotide_nodes", "component_nodes"):
+        assert reported[field] == expected[field]
+    assert reported["sequence_length"] == expected["protein_nodes"]
 
 
 def test_pipeline_config_controls_sequence_requirement(monkeypatch):
@@ -358,7 +367,7 @@ def test_prepare_manifest_runs_manifest_generation_without_adapter(tmp_path):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "emd_1234.map.gz" in output.read_text()
+    assert f"emd_{EMD_ID}.map.gz" in output.read_text()
 
 
 def test_prepare_manifest_requires_explicit_source_before_io(tmp_path, monkeypatch):
@@ -387,6 +396,14 @@ def test_prepare_manifest_requires_explicit_source_before_io(tmp_path, monkeypat
         (["--artifact-s3-prefix", "s3://bucket/key"], "scratch storage"),
         (
             ["-o", "contracts.artifact.format_version=2"],
+            "must be a schema version string",
+        ),
+        (
+            ["-o", "contracts.artifact.format_version=N2610211"],
+            "Unsupported artifact contract",
+        ),
+        (
+            ["-o", "contracts.artifact.format_version=F2610210"],
             "Unsupported artifact contract",
         ),
     ],
@@ -555,7 +572,7 @@ def test_custom_root_pipeline_is_shared_by_inspection_and_execution(
     assert executed.exit_code == 0, executed.output
     assert seen == [OmegaConf.to_container(inspected_config.pipeline, resolve=True)]
     assert seen[0]["workers"] == 9
-    assert "emd_1234.map.gz" in manifest.read_text()
+    assert f"emd_{EMD_ID}.map.gz" in manifest.read_text()
 
 
 def test_explicit_inspection_pipeline_flag_wins_over_group_override():
@@ -989,7 +1006,7 @@ def test_sequence_generation_cli_loads_adapter_from_hydra(monkeypatch, tmp_path)
             "num_workers": 2,
         }
     ]
-    assert "1abc.npz" in (tmp_path / "manifest.csv").read_text()
+    assert f"{PDB_ID}.npz" in (tmp_path / "manifest.csv").read_text()
 
 
 def test_sequence_generation_runner_preserves_phase_order(monkeypatch, tmp_path):

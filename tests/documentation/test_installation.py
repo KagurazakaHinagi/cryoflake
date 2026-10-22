@@ -135,6 +135,21 @@ def test_source_distribution_keeps_documentation_tests_and_public_guides(
     for path in [
         PROJECT_ROOT / ".github/workflows/ci.yml",
         PROJECT_ROOT / "AGENTS.md",
+        *(
+            PROJECT_ROOT / relative
+            for relative in (
+                "tests/conftest.py",
+                "tests/standard_target.py",
+                "tests/test_standard_target.py",
+                "tests/fixtures/emd_11736_7ae1/7ae1.cif.gz",
+                "tests/fixtures/emd_11736_7ae1/subset.cif.gz",
+                "tests/fixtures/emd_11736_7ae1/standard_arrays.npz",
+                "tests/fixtures/emd_11736_7ae1/full_entry_targets.npz",
+                "tests/fixtures/emd_11736_7ae1/provenance.json",
+                "tests/fixtures/emd_11736_7ae1/README.md",
+                "tests/fixtures/emd_11736_7ae1/regenerate.py",
+            )
+        ),
         *sorted((PROJECT_ROOT / "docs").rglob("*.md")),
         *sorted((PROJECT_ROOT / "tests/documentation").glob("*.py")),
     ]:

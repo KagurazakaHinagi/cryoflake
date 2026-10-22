@@ -8,11 +8,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from cryoflake.constants import NodeKind
 from cryoflake.preprocess import manifest as preprocess_manifest
 from cryoflake.preprocess import worker
 from cryoflake.preprocess.checkpoint import PreprocessCheckpoint
 from cryoflake.preprocess.memory_guard import PreprocessMemoryAdmission
 from cryoflake.preprocess.models import _PreprocessManifestRowTask
+from cryoflake.preprocess.reuse import _ValidatedTrainingArtifact
 from cryoflake.storage.upload_cache import BatchedArtifactUploadCache
 
 
@@ -52,7 +54,10 @@ def _task(tmp_path, *, preprocess_adapter, admission, upload_cache=None):
     )
 
 
-def test_worker_releases_loaded_arrays_before_memory_reservation(monkeypatch, tmp_path):
+@pytest.mark.parametrize("validation_fails", [False, True])
+def test_worker_releases_loaded_arrays_before_memory_reservation(
+    monkeypatch, tmp_path, validation_fails
+):
     array_refs = []
 
     class CheckingAdmission(PreprocessMemoryAdmission):
@@ -72,8 +77,9 @@ def test_worker_releases_loaded_arrays_before_memory_reservation(monkeypatch, tm
             "extension_targets": {
                 "component": {
                     "positions": positions,
-                    "interface_mask": np.zeros(0, dtype=bool),
-                    "split_groups": {"component": (), "interface": ()},
+                    "component_id": np.empty(0, dtype=str),
+                    "node_kind": np.empty(0, dtype=np.int64),
+                    "interface_group_id": np.empty(0, dtype=str),
                 }
             },
         }
@@ -82,17 +88,100 @@ def test_worker_releases_loaded_arrays_before_memory_reservation(monkeypatch, tm
     task = _task(tmp_path, preprocess_adapter=lambda **_: None, admission=admission)
     monkeypatch.setattr(worker, "estimate_preprocess_memory_or_none", lambda *_: None)
     monkeypatch.setattr(worker, "load_preprocessed_artifact", load_payload)
+
+    def validate_payload(mapping, **kwargs):
+        if validation_fails:
+            normalized = np.zeros((2, 3), dtype=np.float32)
+            array_refs.append(weakref.ref(normalized))
+            raise ValueError("Invalid target array")
+        return _ValidatedTrainingArtifact(
+            grid_shape=mapping["density_grid"].shape,
+            voxel_size=1.0,
+            protein_nodes=0,
+            nucleotide_nodes=0,
+            component_targets=mapping["extension_targets"]["component"],
+            sequence_shape=None,
+        )
+
+    monkeypatch.setattr(worker, "_validate_training_artifact_mapping", validate_payload)
+
+    if validation_fails:
+        with pytest.raises(ValueError, match="does not satisfy the training contract"):
+            worker._preprocess_manifest_row(task)
+    else:
+        result = worker._preprocess_manifest_row(task)
+        assert result.preprocess_succeeded
+    assert admission.reserved_bytes == 0
+
+
+def test_worker_derives_sorted_groups_and_counts_interface_nodes_from_lean_targets(
+    monkeypatch, tmp_path
+):
+    component = {
+        "positions": np.zeros((5, 3), dtype=np.float32),
+        "component_id": np.asarray(["LIG", "HOH", "LIG", "ATP", "DOD"]),
+        "node_kind": np.asarray(
+            [
+                NodeKind.NON_POLYMER,
+                NodeKind.WATER,
+                NodeKind.NON_POLYMER,
+                NodeKind.NON_POLYMER,
+                NodeKind.WATER,
+            ],
+            dtype=np.int64,
+        ),
+        "interface_group_id": np.asarray(
+            [
+                "LIG|bbbbbbbbbbbbbbbb",
+                "",
+                "LIG|bbbbbbbbbbbbbbbb",
+                "ATP|aaaaaaaaaaaaaaaa",
+                "DOD|cccccccccccccccc",
+            ]
+        ),
+    }
+    original = {key: value.copy() for key, value in component.items()}
+    artifact_mapping = {
+        "density_grid": np.zeros((2, 2, 2), dtype=np.float32),
+        "voxel_size": 1.0,
+        "extension_targets": {"component": component},
+    }
+    admission = PreprocessMemoryAdmission(10)
+    task = _task(tmp_path, preprocess_adapter=lambda **_: None, admission=admission)
+    monkeypatch.setattr(worker, "estimate_preprocess_memory_or_none", lambda *_: None)
     monkeypatch.setattr(
-        worker, "_preprocessed_artifact_is_reusable", lambda *_, **__: True
+        worker, "load_preprocessed_artifact", lambda *_, **__: artifact_mapping
     )
     monkeypatch.setattr(
-        "cryoflake.targets.schema.validate_component_extension_targets",
-        lambda value: value,
+        worker,
+        "_validate_training_artifact_mapping",
+        lambda mapping, **_: _ValidatedTrainingArtifact(
+            grid_shape=mapping["density_grid"].shape,
+            voxel_size=1.0,
+            protein_nodes=0,
+            nucleotide_nodes=0,
+            component_targets=mapping["extension_targets"]["component"],
+            sequence_shape=None,
+        ),
     )
 
     result = worker._preprocess_manifest_row(task)
 
     assert result.preprocess_succeeded
+    assert result.summary_row["component_node_count"] == "5"
+    assert result.summary_row["component_interface_count"] == "4"
+    assert result.summary_row["component_group_ids"] == "ATP;LIG"
+    expected_interfaces = (
+        "ATP|aaaaaaaaaaaaaaaa",
+        "DOD|cccccccccccccccc",
+        "LIG|bbbbbbbbbbbbbbbb",
+    )
+    assert result.summary_row["interface_group_ids"] == ";".join(expected_interfaces)
+    assert result.grouped_split_record.component_group_ids == ("ATP", "LIG")
+    assert result.grouped_split_record.interface_group_ids == expected_interfaces
+    assert set(component) == set(original)
+    for key, value in original.items():
+        np.testing.assert_array_equal(component[key], value)
     assert admission.reserved_bytes == 0
 
 

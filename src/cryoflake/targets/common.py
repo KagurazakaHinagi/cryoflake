@@ -18,6 +18,25 @@ from cryoflake.constants import (
     PolymerKind,
 )
 
+_MASK_CHECK_BUFFER_ELEMENTS = 256 * 1024
+
+
+def _all_boolean_values(array: np.ndarray) -> bool:
+    """Check numeric 0/1 masks without an array-sized temporary."""
+
+    if array.dtype.kind == "b":
+        return True
+    for chunk in np.nditer(
+        array,
+        flags=["external_loop", "buffered", "zerosize_ok"],
+        op_flags=["readonly"],
+        order="K",
+        buffersize=_MASK_CHECK_BUFFER_ELEMENTS,
+    ):
+        if not np.isin(chunk, (0, 1)).all():
+            return False
+    return True
+
 
 @dataclass(frozen=True)
 class _Atom:

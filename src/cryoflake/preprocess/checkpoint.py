@@ -19,7 +19,7 @@ from cryoflake.storage.store import (
     preprocessed_artifact_root,
 )
 
-PREPROCESS_CHECKPOINT_FORMAT_VERSION = 5
+PREPROCESS_CHECKPOINT_FORMAT_VERSION = "C2610210"
 _GROUPED_RECORD_FIELDS = {
     "artifact_reference",
     "artifact_group_id",
@@ -436,7 +436,7 @@ class PreprocessCheckpoint:
             isinstance(metadata, Mapping)
             and set(metadata)
             == {"format_version", "fingerprint", "generation", "contract"}
-            and type(metadata.get("format_version")) is int
+            and type(metadata.get("format_version")) is str
             and metadata.get("format_version") == PREPROCESS_CHECKPOINT_FORMAT_VERSION
             and metadata.get("fingerprint") == self.fingerprint
             and isinstance(metadata.get("contract"), Mapping)

@@ -54,6 +54,13 @@ errors, tests, and documentation.
 - Review schema versions and checkpoint identities when serialized names or
   their meanings change. Add regression tests proving removed names and
   unsupported versions are rejected.
+- Schema identifiers use quoted `PYYMMDDX` strings: release date `YYMMDD` and
+  revision `X` from 0 through 9. Prefixes are `S` for semantic preprocessing,
+  `N` for NPZ+JSON storage, `F` for full-atom targets, `E` for component
+  extensions, `G` for grouped split reports, and `C` for preprocessing
+  checkpoints. Each domain advances independently; accept only its exact
+  supported identifier and reject numeric legacy versions. Ask the user
+  before changing a contract identifier in future work.
 
 ## Documentation changes require CI test coverage
 
@@ -81,6 +88,23 @@ exempt a behavioral claim from testing.
 - For spelling, formatting, links, or policy prose that changes no executable
   behavior or contract, run the existing documentation checks and state why
   existing coverage is sufficient. Do not add tests that merely match prose.
+
+## Standard offline molecular target
+
+Use the compact EMD-11736 / 7AE1 fixture through
+[`tests/standard_target.py`](tests/standard_target.py) for general molecular
+artifact, validation, and workflow tests. Its
+[README](tests/fixtures/emd_11736_7ae1/README.md) and
+[provenance](tests/fixtures/emd_11736_7ae1/provenance.json) describe the real
+structure subset, extracted targets, and downsampled density. Keep genuine
+coordinates, atom names, masks, and cached geometry as the reference values.
+Load independent copies before making changes.
+
+Synthetic inputs and mutations remain appropriate when the behavior under
+test is an invalid value, boundary, format, or rare molecular case. State that
+purpose locally; do not introduce an unrelated invented molecule or empty
+geometry as a general reference payload. Synthetic embeddings must be labeled
+as test data. Keep routine tests offline and independent of model weights.
 
 ## Verification and maintenance
 
